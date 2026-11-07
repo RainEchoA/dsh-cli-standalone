@@ -216,9 +216,11 @@ async function main() {
         protobufjs: true,
       },
     }, null, 2)}\n`)
-    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-    run(npm, [
-      'install', '--omit=dev', '--include=optional', '--no-audit', '--no-fund',
+    const nodeRoot = join(extractDir, distributionName)
+    const npmNode = join(nodeRoot, options.platform === 'linux' ? 'bin/node' : 'node.exe')
+    const npmCli = join(nodeRoot, options.platform === 'linux' ? 'lib/node_modules/npm/bin/npm-cli.js' : 'node_modules/npm/bin/npm-cli.js')
+    if (!existsSync(npmCli)) throw new Error(`Node.js archive does not bundle npm: ${npmCli}`)
+    run(npmNode, [npmCli, 'install', '--omit=dev', '--include=optional', '--no-audit', '--no-fund',
       '--save-exact', '--package-lock=true', '--loglevel=warn', '--strict-allow-scripts',
       options.packageSpec,
     ], { cwd: appDir })
@@ -280,14 +282,10 @@ async function main() {
 
     const archive = join(outputDir, `${rootName}.${options.platform === 'linux' ? 'tar.gz' : 'zip'}`)
     if (existsSync(archive)) rmSync(archive)
-    if (options.platform === 'linux') {
-      run('tar', ['-czf', archive, '-C', bundleParent, rootName])
-    } else {
-      run('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-        'Compress-Archive -LiteralPath $env:DSH_PACK_ROOT -DestinationPath $env:DSH_PACK_OUT -CompressionLevel Optimal',
-      ], { env: { ...process.env, DSH_PACK_ROOT: bundleDir, DSH_PACK_OUT: archive } })
-    }
+    // -a lets bsdtar pick the container from the extension (zip on Windows); it streams
+    // instead of buffering the whole bundle like Compress-Archive, which balloons RAM
+    // and stalls the job on multi-GB payloads.
+    run('tar', ['-a', '-cf', archive, '-C', bundleParent, rootName])
     const archiveHash = await sha256(archive)
     const checksumFile = `${archive}.sha256`
     writeFileSync(checksumFile, `${archiveHash}  ${basename(archive)}\n`)

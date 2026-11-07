@@ -91,3 +91,7 @@ if (process.platform === 'linux') {
 }
 evidence.loadedNativeLibraries = loaded.filter((path) => path.endsWith('.node'))
 console.log(`NATIVE_PROBE ${JSON.stringify(evidence, null, 2)}`)
+// node-pty's ConPTY handle keeps the libuv loop referenced on Windows after the
+// shell exits, so this probe would never exit on its own; tear it down and leave.
+try { terminal.kill() } catch { /* already dead */ }
+setTimeout(() => process.exit(0), 500)
