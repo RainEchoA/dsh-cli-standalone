@@ -153,6 +153,10 @@ install.ps1
 - 安装后版本输出不符：硬失败。
 - 下载失败：返回非零，不自动切换镜像或版本。
 
+## 性能实验记录
+
+- `doc/iops-benchmark.md`：中移云电脑上 npm 安装 dsh 的计时分解与磁盘 IOPS 基准测试过程（winsat + Node 微基准，脚本同目录）。结论：此类高带宽、低随机、高元数据延迟的虚拟盘会把 npm 安装放大约 10 倍，瓶颈不在带宽，standalone 预解包方案对该类环境收益明显。
+
 ## 许可证
 
 本仓库打包与安装脚本使用 MIT。DeepSeek Harness、Node.js 及依赖分别遵循其原始许可证；归档保留 Node.js LICENSE、npm 包元数据及随依赖发布的许可证文件。
