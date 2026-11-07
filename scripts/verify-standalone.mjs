@@ -21,14 +21,26 @@ function parseArgs(argv) {
   return options
 }
 
+// Node refuses to spawn .cmd/.bat files without a shell since the CVE-2024-27980 fix,
+// and shell:true misjoins arguments (it breaks paths containing spaces), so route them
+// through cmd.exe with explicit quoting; the outer quote pair lets /s /c strip cleanly.
+function windowsCommand(command, args, options = {}) {
+  if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(command)) return [command, args, options]
+  const quote = (value) => `"${String(value).replace(/"/g, '""')}"`
+  const cmdline = `"${[quote(command), ...args.map(quote)].join(' ')}"`
+  return [process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', cmdline], { ...options, windowsVerbatimArguments: true }]
+}
+
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { stdio: 'inherit', ...options })
+  const [file, callArgs, spawnOptions] = windowsCommand(command, args, { stdio: 'inherit', ...options })
+  const result = spawnSync(file, callArgs, spawnOptions)
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${command} exited with ${result.status}`)
 }
 
 function capture(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: 'utf8', ...options })
+  const [file, callArgs, spawnOptions] = windowsCommand(command, args, { encoding: 'utf8', ...options })
+  const result = spawnSync(file, callArgs, spawnOptions)
   if (result.error) throw result.error
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} exited with ${result.status}\n${output}`)
@@ -70,10 +82,11 @@ function killProcessTree(child, platform) {
 async function verifyWeb(launcher, env, temp, platform) {
   const home = join(temp, 'web-home')
   mkdirSync(home)
-  const child = spawn(launcher, ['web', '--no-open', '--host', '127.0.0.1', '--port', '0'], {
+  const [webFile, webArgs, webOptions] = windowsCommand(launcher, ['web', '--no-open', '--host', '127.0.0.1', '--port', '0'], {
     env: { ...env, DSH_HOME: home, NO_COLOR: '1', CI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  const child = spawn(webFile, webArgs, webOptions)
   let logs = ''
   const safeLogs = () => logs.replace(/([?&]token=)[^\s&]+/g, '$1<redacted>')
   let url

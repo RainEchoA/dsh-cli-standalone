@@ -85,17 +85,27 @@ function assertSupported(options) {
   }
 }
 
+// Node refuses to spawn .cmd/.bat files without a shell since the CVE-2024-27980 fix,
+// and shell:true misjoins arguments (it breaks paths containing spaces), so route them
+// through cmd.exe with explicit quoting; the outer quote pair lets /s /c strip cleanly.
+function windowsCommand(command, args, options = {}) {
+  if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(command)) return [command, args, options]
+  const quote = (value) => `"${String(value).replace(/"/g, '""')}"`
+  const cmdline = `"${[quote(command), ...args.map(quote)].join(' ')}"`
+  return [process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', cmdline], { ...options, windowsVerbatimArguments: true }]
+}
+
 function run(command, args, options = {}) {
   console.log(`+ ${command} ${args.join(' ')}`)
-  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) options = { ...options, shell: true }
-  const result = spawnSync(command, args, { stdio: 'inherit', ...options })
+  const [file, callArgs, spawnOptions] = windowsCommand(command, args, { stdio: 'inherit', ...options })
+  const result = spawnSync(file, callArgs, spawnOptions)
   if (result.error) throw new Error(`Failed to execute ${command}: ${result.error.message}`)
   if (result.status !== 0) throw new Error(`${command} exited with code ${result.status ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`)
 }
 
 function capture(command, args, options = {}) {
-  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) options = { ...options, shell: true }
-  const result = spawnSync(command, args, { encoding: 'utf8', ...options })
+  const [file, callArgs, spawnOptions] = windowsCommand(command, args, { encoding: 'utf8', ...options })
+  const result = spawnSync(file, callArgs, spawnOptions)
   if (result.error) throw new Error(`Failed to execute ${command}: ${result.error.message}`)
   if (result.status !== 0) {
     throw new Error(`${command} exited with code ${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)

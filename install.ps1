@@ -108,9 +108,9 @@ try {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($Archive, $unpacked)
     $root = Join-Path $unpacked "dsh-v$Version-win-x64"
     $launcher = Join-Path $root 'bin\dsh.cmd'
-    if (-not (Test-Path -LiteralPath $launcher)) { throw 'Archive does not contain bin\dsh.cmd' }
-    if (-not (Test-Path -LiteralPath (Join-Path $root 'runtime\node.exe'))) { throw 'Archive does not contain runtime\node.exe' }
-    if (-not (Test-Path -LiteralPath (Join-Path $root 'manifest.json'))) { throw 'Archive does not contain manifest.json' }
+    if (-not (Test-Path -LiteralPath $launcher)) { throw "Archive does not contain the expected bin\dsh.cmd" }
+    if (-not (Test-Path -LiteralPath (Join-Path $root 'runtime\node.exe'))) { throw "Archive does not contain the expected runtime\node.exe" }
+    if (-not (Test-Path -LiteralPath (Join-Path $root 'manifest.json'))) { throw "Archive does not contain the expected manifest.json" }
 
     $reported = Invoke-Dsh $launcher @('--version')
     if ($reported -ne $Version) { throw "Staged dsh --version returned $reported; expected $Version" }

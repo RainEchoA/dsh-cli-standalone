@@ -16,6 +16,16 @@ function args() {
 }
 
 function invoke(command, commandArgs, options = {}) {
+  // Node refuses to spawn .cmd/.bat files without a shell since the CVE-2024-27980 fix,
+  // and shell:true misjoins arguments (it breaks paths containing spaces), so route them
+  // through cmd.exe with explicit quoting; the outer quote pair lets /s /c strip cleanly.
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+    const quote = (value) => `"${String(value).replace(/"/g, '""')}"`
+    const cmdline = `"${[quote(command), ...commandArgs.map(quote)].join(' ')}"`
+    command = process.env.ComSpec || 'cmd.exe'
+    commandArgs = ['/d', '/s', '/c', cmdline]
+    options = { ...options, windowsVerbatimArguments: true }
+  }
   const result = spawnSync(command, commandArgs, { encoding: 'utf8', ...options })
   return {
     ...result,
