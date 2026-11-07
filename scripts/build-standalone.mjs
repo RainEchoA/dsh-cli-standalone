@@ -87,12 +87,14 @@ function assertSupported(options) {
 
 function run(command, args, options = {}) {
   console.log(`+ ${command} ${args.join(' ')}`)
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) options = { ...options, shell: true }
   const result = spawnSync(command, args, { stdio: 'inherit', ...options })
   if (result.error) throw new Error(`Failed to execute ${command}: ${result.error.message}`)
   if (result.status !== 0) throw new Error(`${command} exited with code ${result.status ?? 'null'}${result.signal ? ` (${result.signal})` : ''}`)
 }
 
 function capture(command, args, options = {}) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) options = { ...options, shell: true }
   const result = spawnSync(command, args, { encoding: 'utf8', ...options })
   if (result.error) throw new Error(`Failed to execute ${command}: ${result.error.message}`)
   if (result.status !== 0) {
