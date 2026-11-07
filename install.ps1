@@ -9,6 +9,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# A pwsh (PowerShell 7) parent exports a PSModulePath that lists PowerShell 7 module
+# folders; under Windows PowerShell that can shadow the built-in modules with the
+# incompatible 7.x copies and lose cmdlets like Get-FileHash. Drop those entries.
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -and $_ -notlike '*\PowerShell\7*' }) -join ';'
+}
 if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') { throw "Unsafe version string: $Version" }
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Only x64 Windows is supported' }
 $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
