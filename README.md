@@ -57,7 +57,19 @@ Windows 使用对应 ZIP 和 `--platform win`。
 
 ## 安装
 
-在线安装必须显式指定版本，不隐式解析 latest：
+在线安装必须显式指定版本，不隐式解析 latest。可以直接使用 Release 附带的安装脚本：
+
+```sh
+curl -fsSLO https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.sh
+sh install.sh --version 0.2.2-rc.1
+```
+
+```powershell
+Invoke-WebRequest -UseBasicParsing -OutFile install.ps1 https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.ps1
+.\install.ps1 -Version 0.2.2-rc.1
+```
+
+仓库内的 `install.sh`／`install.ps1` 与发布产物等价：
 
 ```sh
 ./install.sh --version 0.2.2-rc.1
@@ -97,13 +109,39 @@ node tests/installer-regression.mjs \
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` 包含：
+`.github/workflows/ci.yml`（main 分支 push、pull request、手动触发）包含：
 
 - Ubuntu 与 Windows 独立构建、解包验证、Web GUI 请求和安装器正负分支；
 - CentOS 8 容器内无预装 Node.js 的安装与再次解包验证；
 - 上传带 SHA-256 的平台归档为 workflow artifact。
 
+`.github/workflows/release.yml`（`v*` 标签 push、手动触发）复用同一套构建与验证，全部通过后将产物发布到 GitHub Release，见“发布”。
+
 CentOS 8 容器只证明 **glibc 2.28 用户空间兼容性**。容器使用宿主机内核，因此不能据此宣称已验证 CentOS 8 的 4.18 内核或 Landlock 降级行为。
+
+## 发布
+
+发布走 GitHub Actions，不在本机手工上传产物。两种触发方式：
+
+```sh
+git tag v0.2.2-rc.2
+git push origin v0.2.2-rc.2
+```
+
+或在仓库的 Actions 页面手动运行 `release` 工作流并输入版本号（如 `0.2.2-rc.2`）；手动触发会自动创建 `v<version>` 标签。
+
+发布前，工作流会完整执行与 CI 相同的构建与验证（两个平台独立构建、解包验证、Web GUI 请求、安装器正负分支、CentOS 8 容器复验、发布前再次核对 SHA-256），任何一步失败都不会创建 Release。重跑同一版本是安全的：同名资产会被覆盖更新。
+
+Release `v<version>` 包含以下资产，与安装脚本的下载约定一致：
+
+```text
+dsh-v<version>-linux-x64.tar.gz      + .sha256
+dsh-v<version>-win-x64.zip           + .sha256
+install.sh
+install.ps1
+```
+
+版本号带 `-`（如 `0.2.2-rc.1`）会自动标记为 prerelease。
 
 ## 防静默失效约束
 

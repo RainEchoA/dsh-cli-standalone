@@ -1,0 +1,145 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (for example 0.2.2-rc.2); creates tag v<version> on the triggering commit'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.22.2
+
+jobs:
+  package:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            extension: tar.gz
+          - platform: win
+            os: windows-latest
+            extension: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Resolve release version
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if ! printf '%s' "$version" | grep -qE '^[0-9A-Za-z][0-9A-Za-z._-]*$'; then
+            echo "Unsafe release version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build standalone archive
+        run: node scripts/build-standalone.mjs --version "${{ steps.meta.outputs.version }}" --node-version "${{ env.NODE_VERSION }}" --platform "${{ matrix.platform }}" --output-dir dist
+      - name: Verify extracted runtime, fake-system-Node guard, and Web GUI
+        run: node scripts/verify-standalone.mjs --archive "dist/dsh-v${{ steps.meta.outputs.version }}-${{ matrix.platform }}-x64.${{ matrix.extension }}" --version "${{ steps.meta.outputs.version }}" --platform "${{ matrix.platform }}"
+      - name: Exercise installer success and forced-failure branches
+        run: node tests/installer-regression.mjs --archive "dist/dsh-v${{ steps.meta.outputs.version }}-${{ matrix.platform }}-x64.${{ matrix.extension }}" --version "${{ steps.meta.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: standalone-${{ matrix.platform }}-x64
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  centos8:
+    if: always()
+    needs: package
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-linux-x64
+          path: dist
+      - name: Resolve release version
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Verify archive on CentOS 8 without preinstalled Node.js
+        run: sh tests/centos8.sh "${{ steps.meta.outputs.version }}" "dist/dsh-v${{ steps.meta.outputs.version }}-linux-x64.tar.gz"
+
+  release:
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.centos8.result == 'success' }}
+    needs: [package, centos8]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+      - name: Create tag for dispatch releases
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git tag "${{ steps.meta.outputs.tag }}" "${GITHUB_SHA}"
+          git push origin "${{ steps.meta.outputs.tag }}"
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-linux-x64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-win-x64
+          path: dist
+      - name: Check artifact checksums
+        run: |
+          cd dist
+          sha256sum -c *.sha256
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.meta.outputs.tag }}"
+          prerelease=
+          case "${{ steps.meta.outputs.version }}" in *-*) prerelease=--prerelease ;; esac
+          # Reruns must be safe: create when missing, then overwrite same-name assets.
+          gh release create "$tag" --title "$tag" --generate-notes $prerelease || true
+          gh release upload "$tag" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 install.sh install.ps1 --clobber
+          gh release view "$tag" --json url --jq .url
