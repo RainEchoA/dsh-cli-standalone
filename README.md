@@ -117,6 +117,8 @@ node tests/installer-regression.mjs \
 
 `.github/workflows/release.yml`（`v*` 标签 push、手动触发）复用同一套构建与验证，全部通过后将产物发布到 GitHub Release，见“发布”。
 
+`.github/workflows/daily-version-scan.yml`（定时每天 21:00 北京时间、手动触发）扫描 npm 上 `@deepseek-ai/dsh` 的最新版本（排除 dev/alpha，semver 优先级取最大）：发现新的**稳定版**时自动触发 `release` 工作流发布（失败次日自动重试）；发现 rc/beta 时创建或更新跟踪 issue 等待人工确认。
+
 CentOS 8 容器只证明 **glibc 2.28 用户空间兼容性**。容器使用宿主机内核，因此不能据此宣称已验证 CentOS 8 的 4.18 内核或 Landlock 降级行为。
 
 ## 发布

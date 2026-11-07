@@ -1,0 +1,112 @@
+name: daily-version-scan
+
+on:
+  schedule:
+    - cron: '0 13 * * *' # 每天 21:00（北京时间）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: write # 用于在发现新的稳定版时 dispatch release 工作流
+
+env:
+  NODE_VERSION: 24.22.2
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Scan latest eligible dsh version on npm
+        id: scan
+        run: echo "latest=$(node scripts/scan-latest-version.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Decide action
+        id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest="${{ steps.scan.outputs.latest }}"
+          current=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/dev/null | sed 's/^v//' || true)
+
+          action=track
+          if [ -z "$current" ]; then
+            # 尚无 standalone release：稳定版直接发，rc/beta 先跟踪
+            case "$latest" in *-*) action=track ;; *) action=release ;; esac
+          elif [ "$latest" = "$current" ]; then
+            action=none
+          elif gh api "repos/${{ github.repository }}/releases/tags/v$latest" >/dev/null 2>&1; then
+            # 该版本已发布过（例如重跑），不重复动作
+            action=none
+          else
+            case "$latest" in
+              *-*) action=track ;;  # rc/beta：人工确认后发布
+              *) action=release ;;  # 新的稳定版：自动发布
+            esac
+          fi
+
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "npm=$latest standalone=${current:-（尚无）} action=$action" >> "$GITHUB_STEP_SUMMARY"
+      - name: Trigger release for new stable version
+        if: steps.compare.outputs.action == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.compare.outputs.latest }}"
+          gh workflow run release -R "${{ github.repository }}" -f "version=$version"
+          sleep 5
+          run_url=$(gh run list -R "${{ github.repository }}" --workflow release --limit 1 --json url --jq '.[0].url')
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+          echo "已触发 v$version 发布：$run_url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Open or update tracking issue
+        if: steps.compare.outputs.action != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest="${{ steps.compare.outputs.latest }}"
+          current="${{ steps.compare.outputs.current }}"
+          action="${{ steps.compare.outputs.action }}"
+          run_url="${{ steps.trigger-release.outputs.run_url }}"
+          gh label create version-scan --force --color BFD4F2 --description "上游 dsh 新版本跟踪" >/dev/null 2>&1 || true
+          if [ "$action" = "release" ]; then
+            body=$(cat <<EOF
+            定时扫描发现新的稳定版 \`@deepseek-ai/dsh@$latest\`，已自动触发发布。
+
+            - npm 稳定版：\`$latest\`
+            - 本仓库先前 release：\`${current:-（尚无）}\`
+            - 发布运行：$run_url
+
+            发布流水线会完成双平台构建与全部验证；若失败，次日扫描会自动重试。
+            EOF
+            )
+          else
+            body=$(cat <<EOF
+            定时扫描发现 npm 上有新的符合过滤条件的 \`@deepseek-ai/dsh\` 版本（预发布，需人工确认）。
+
+            - npm 最新版本（已排除 dev/alpha）：\`$latest\`
+            - 本仓库最新 standalone release：\`${current:-（尚无）}\`
+
+            确认跟进后发布：
+
+            \`\`\`sh
+            git tag v$latest && git push origin v$latest
+            \`\`\`
+
+            或手动运行 \`release\` 工作流并输入版本 \`$latest\`。
+            EOF
+            )
+          fi
+          existing=$(gh issue list --label version-scan --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "已在 issue #$existing 下追加评论" >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh issue create --title "[scan] 上游 dsh 新版本：$latest" --label version-scan --body "$body"
+            echo "已创建跟踪 issue" >> "$GITHUB_STEP_SUMMARY"
+          fi
