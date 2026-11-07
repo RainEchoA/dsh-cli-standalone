@@ -1,0 +1,64 @@
+name: standalone-smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DSH_VERSION: 0.2.2-rc.1
+  NODE_VERSION: 24.22.2
+
+jobs:
+  package:
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            extension: tar.gz
+          - platform: win
+            os: windows-latest
+            extension: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Build standalone archive
+        run: node scripts/build-standalone.mjs --version "${{ env.DSH_VERSION }}" --node-version "${{ env.NODE_VERSION }}" --platform "${{ matrix.platform }}" --output-dir dist
+      - name: Verify extracted runtime, fake-system-Node guard, and Web GUI
+        run: node scripts/verify-standalone.mjs --archive "dist/dsh-v${{ env.DSH_VERSION }}-${{ matrix.platform }}-x64.${{ matrix.extension }}" --version "${{ env.DSH_VERSION }}" --platform "${{ matrix.platform }}"
+      - name: Exercise installer success and forced-failure branches
+        run: node tests/installer-regression.mjs --archive "dist/dsh-v${{ env.DSH_VERSION }}-${{ matrix.platform }}-x64.${{ matrix.extension }}" --version "${{ env.DSH_VERSION }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: standalone-${{ matrix.platform }}-x64
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  centos8:
+    if: always()
+    needs: package
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-linux-x64
+          path: dist
+      - name: Verify archive on CentOS 8 without preinstalled Node.js
+        run: sh tests/centos8.sh "${{ env.DSH_VERSION }}" "dist/dsh-v${{ env.DSH_VERSION }}-linux-x64.tar.gz"
