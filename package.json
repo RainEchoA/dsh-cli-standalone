@@ -1,0 +1,16 @@
+{
+  "name": "dsh-cli-standalone",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental standalone Linux and Windows runtime archives for the DeepSeek Harness dsh CLI",
+  "scripts": {
+    "build:linux": "node scripts/build-standalone.mjs --version 0.2.2-rc.1 --platform linux",
+    "build:win": "node scripts/build-standalone.mjs --version 0.2.2-rc.1 --platform win",
+    "test:install": "node tests/installer-regression.mjs"
+  },
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "license": "MIT"
+}
