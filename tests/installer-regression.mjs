@@ -185,6 +185,7 @@ async function main() {
 
     if (platform === 'win') {
       const inferredPrefix = join(temp, 'inferred-version-prefix')
+      copyFileSync(`${archive}.sha256`, `${isolatedArchive}.sha256`)
       result = runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
       assertSuccess(result, 'archive-name version inference installation')
       if (!result.output.toLowerCase().includes('resolved dsh version')) {
@@ -212,6 +213,7 @@ async function main() {
       await exerciseResolution('-GitHubProxy')
     } else {
       const inferredPrefix = join(temp, 'inferred-version-prefix')
+      copyFileSync(`${archive}.sha256`, `${isolatedArchive}.sha256`)
       result = runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
       assertSuccess(result, 'archive-name version inference installation')
       if (!result.output.toLowerCase().includes('resolved dsh version')) {
