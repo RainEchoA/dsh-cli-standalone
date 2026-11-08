@@ -1,0 +1,50 @@
+# CNB 云原生构建配置
+#
+# 目标：每天凌晨 1 点（Asia/Shanghai）检查 GitHub 上的 Release 产物，
+#       并把「已构建好的产物」同步到本仓库的 CNB Release（不触发任何构建）。
+#
+# - 读取 GitHub 全部使用匿名访问（公开仓库，无需任何 Token / 密钥）。
+# - 写入 CNB 使用流水线内置的 CNB_TOKEN（构建结束自动销毁，仅限当前仓库）。
+# - 同步脚本：scripts/sync-release.mjs（幂等：附件已存在且大小一致会跳过）。
+#
+# 社区可参考的实现：
+#   - mpgrm（gsync 的继任者）：https://cnb.cool/zhiqiangwang/mpgrm
+#     镜像 docker.cnb.cool/zhiqiangwang/mpgrm:latest
+#     用法：mpgrm --target-token "$CNB_TOKEN" --target-username cnb \
+#             releases latest --repo https://github.com/<owner>/<repo>.git \
+#             --target-repo https://cnb.cool/<group>/<repo>.git
+#   - CNB 附件插件：https://cnb.cool/cnb/plugins/cnbcool/attachments
+#
+# 手动触发：在仓库页面「云原生构建」里点击运行，或执行
+#   cnb-rs build start --repo aixx.work/dsh-cli-standalone
+
+main:
+  # 每天 01:00 定时同步
+  "crontab: 0 1 * * *":
+    - name: daily-sync-github-release
+      env:
+        GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
+        CNB_REPO: "aixx.work/dsh-cli-standalone"
+      stages:
+        - name: sync-release
+          image: node:22
+          script: |
+            set -euo pipefail
+            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
+            echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
+            node scripts/sync-release.mjs
+
+  # 手动触发同步（web_trigger 可从页面/API 触发）
+  web_trigger:
+    - name: manual-sync-github-release
+      env:
+        GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
+        CNB_REPO: "aixx.work/dsh-cli-standalone"
+      stages:
+        - name: sync-release
+          image: node:22
+          script: |
+            set -euo pipefail
+            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
+            echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
+            node scripts/sync-release.mjs
