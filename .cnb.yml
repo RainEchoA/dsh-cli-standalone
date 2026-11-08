@@ -34,9 +34,24 @@ main:
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
 
-  # 手动触发同步（web_trigger 可从页面/API 触发）
+  # 手动触发同步（web_trigger 可从页面触发）
   web_trigger:
     - name: manual-sync-github-release
+      env:
+        GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
+        CNB_REPO: "aixx.work/dsh-cli-standalone"
+      stages:
+        - name: sync-release
+          image: node:22
+          script: |
+            set -euo pipefail
+            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
+            echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
+            node scripts/sync-release.mjs
+
+  # API 触发同步（cnb-rs build start -e api_trigger / OPENAPI）
+  api_trigger:
+    - name: api-sync-github-release
       env:
         GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
         CNB_REPO: "aixx.work/dsh-cli-standalone"
