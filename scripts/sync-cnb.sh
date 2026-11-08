@@ -57,13 +57,43 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   fi
   log "镜像分支与 tag 到 ${CNB_REPO}"
   if [[ $DRY_RUN -eq 0 ]]; then
-    git push --quiet cnb 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+    # 使用 --force：CNB 侧 README.md 由第 3 步生成，与 GitHub 不同，属正常分叉
+    git push --quiet --force cnb 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
   fi
 else
   log "当前目录不是 Git 仓库，跳过代码镜像"
 fi
 
-# ------------------------------------------------ 3. 同步 Release 产物
+# ------------------------------------------------ 3. 生成 CNB 主页 README
+# CNB 仓库主页固定渲染默认分支的 README.md（无「指定其它 md」开关），
+# 因此把 doc/INSTALL-CNB.md 渲染成 CNB 仓库的 README.md；GitHub 侧 README.md 不受影响。
+log "生成 CNB 主页 README（来源 doc/INSTALL-CNB.md）"
+if [[ $DRY_RUN -eq 1 ]]; then
+  node scripts/render-cnb-readme.mjs --doc doc/INSTALL-CNB.md --out /tmp/README.cnb.preview.md
+  echo "（dry-run）预览：/tmp/README.cnb.preview.md"
+elif [[ -f doc/INSTALL-CNB.md ]]; then
+  tmp_dir=$(mktemp -d)
+  git clone --quiet --depth 1 "https://cnb.cool/${CNB_REPO}.git" "$tmp_dir/repo"
+  node scripts/render-cnb-readme.mjs --doc doc/INSTALL-CNB.md --out "$tmp_dir/repo/README.md"
+  (
+    cd "$tmp_dir/repo"
+    git add README.md
+    if git diff --cached --quiet; then
+      echo "  README 无变化，跳过提交"
+    else
+      git -c user.name="${GIT_USER_NAME:-RainEchoA}" \
+          -c user.email="${GIT_USER_EMAIL:-rainecho@aixx.me}" \
+          commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
+      git push --quiet --force origin HEAD:main
+      echo "  已推送 CNB 主页 README"
+    fi
+  )
+  rm -rf "$tmp_dir"
+else
+  log "未找到 doc/INSTALL-CNB.md，跳过 CNB 主页 README 生成"
+fi
+
+# ------------------------------------------------ 4. 同步 Release 产物
 log "同步 GitHub Release 产物"
 if [[ $DRY_RUN -eq 1 ]]; then
   DRY_RUN=1 CNB_REPO="$CNB_REPO" node scripts/sync-release.mjs

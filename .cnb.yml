@@ -33,6 +33,22 @@ main:
             cd "${CNB_BUILD_WORKSPACE:-/workspace}"
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
+        - name: update-home-readme
+          image: node:22
+          script: |
+            set -eu
+            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
+            node scripts/render-cnb-readme.mjs --doc doc/INSTALL-CNB.md --out README.md
+            git add README.md
+            if git diff --cached --quiet; then
+              echo "CNB 主页 README 无变化，跳过提交"
+            else
+              git -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
+                commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
+              git push --quiet --force \
+                "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
+              echo "已更新 CNB 主页 README"
+            fi
 
   # 手动触发同步（web_trigger 可从页面触发）
   web_trigger:
@@ -48,6 +64,22 @@ main:
             cd "${CNB_BUILD_WORKSPACE:-/workspace}"
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
+        - name: update-home-readme
+          image: node:22
+          script: |
+            set -eu
+            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
+            node scripts/render-cnb-readme.mjs --doc doc/INSTALL-CNB.md --out README.md
+            git add README.md
+            if git diff --cached --quiet; then
+              echo "CNB 主页 README 无变化，跳过提交"
+            else
+              git -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
+                commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
+              git push --quiet --force \
+                "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
+              echo "已更新 CNB 主页 README"
+            fi
 
   # API 触发同步（cnb-rs build start -e api_trigger / OPENAPI）
   api_trigger:
@@ -63,3 +95,19 @@ main:
             cd "${CNB_BUILD_WORKSPACE:-/workspace}"
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
+        - name: update-home-readme
+          image: node:22
+          script: |
+            set -eu
+            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
+            node scripts/render-cnb-readme.mjs --doc doc/INSTALL-CNB.md --out README.md
+            git add README.md
+            if git diff --cached --quiet; then
+              echo "CNB 主页 README 无变化，跳过提交"
+            else
+              git -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
+                commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
+              git push --quiet --force \
+                "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
+              echo "已更新 CNB 主页 README"
+            fi
