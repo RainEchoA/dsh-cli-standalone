@@ -57,39 +57,78 @@ Windows 使用对应 ZIP 和 `--platform win`。
 
 ## 安装
 
-在线安装必须显式指定版本，不隐式解析 latest。可以直接使用 Release 附带的安装脚本：
+### Windows 一行安装
 
-```sh
-curl -fsSLO https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.sh
-sh install.sh --version 0.2.2-rc.1
+与 `powershell -File .\install.ps1` 调用的是同一个脚本（取自本仓库 main 分支，不依赖 release 资产副本）。不显式指定版本时，自动检测本仓库最新 release 的 tag：按 semver 优先级取最大，排除 dev/alpha 前置版本（规则与「每日版本扫描」一致）；显式指定始终优先：
+
+```powershell
+irm https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.ps1 | iex
 ```
+
+可用环境变量（全部可选）：
+
+- `DSH_VERSION`：显式 dsh 版本（不带 `v` 前缀）；缺省时自动解析最新 release。
+- `DSH_ARCHIVE`／`DSH_CHECKSUM`：离线安装本地归档／显式 SHA-256；未设 `DSH_VERSION` 时版本从归档文件名解析。
+- `DSH_PREFIX`：安装位置，默认 `%LOCALAPPDATA%\Programs\dsh`。
+- `DSH_NO_MODIFY_PATH`：非空时禁止修改用户 PATH。
+- `DSH_BASE_URL`／`DSH_RELEASES_API_URL`：release 下载／版本解析 API 的基础地址（镜像、气隙环境）。
+- `DSH_GH_PROXY`：GitHub 加速代理（如 `https://gitproxy.dev`）；把默认 GitHub 地址（安装脚本、版本 API、release 下载）重写为 `<代理>/<原 URL>`，显式指定的 URL 参数不被重写。
+
+版本解析与下载依赖 GitHub API、raw.githubusercontent.com 及 GitHub Release 可达；气隙环境可把上述地址指向镜像。GitHub 直连受限时可用加速代理（外层 `irm` 的 URL 需自行加代理前缀；代理对 api.github.com 的支持因服务而异，解析失败时请显式设置 `DSH_VERSION`）：
+
+```powershell
+$env:DSH_GH_PROXY = 'https://gitproxy.dev'
+irm "$env:DSH_GH_PROXY/https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.ps1" | iex
+```
+
+### Windows 脚本安装
+
+Release 附带的 `install.ps1` 与仓库内副本等价，直接使用 Release 副本：
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing -OutFile install.ps1 https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.ps1
 .\install.ps1 -Version 0.2.2-rc.1
 ```
 
-仓库内的 `install.sh`／`install.ps1` 与发布产物等价：
-
-```sh
-./install.sh --version 0.2.2-rc.1
-```
+版本解析规则与一行安装相同，`-Version` 可省略（自动解析最新 release）；离线归档可省 `-Version`，版本按文件名推断：
 
 ```powershell
-.\install.ps1 -Version 0.2.2-rc.1
+.\install.ps1                                        # 在线，自动解析最新 release
+.\install.ps1 -Version 0.2.2-rc.1                    # 在线，显式版本
+.\install.ps1 -GitHubProxy https://gitproxy.dev      # 在线，走 GitHub 加速代理
+.\install.ps1 -Archive .\dsh-v0.2.2-rc.1-win-x64.zip # 离线，版本从归档名解析
 ```
 
-也支持完全离线的本地归档安装；校验和文件必须位于归档旁：
+### Linux
+
+与 Windows 相同的版本解析规则：`--version` 可省略，不显式指定时自动解析最新 release（排除 dev/alpha）；离线归档按文件名推断版本。可以直接使用 Release 附带的安装脚本：
+
+```sh
+curl -fsSLO https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.sh
+sh install.sh --version 0.2.2-rc.1
+```
+
+仓库内的 `install.sh` 与发布产物等价，常用形式：
+
+```sh
+./install.sh                                                 # 在线，自动解析最新 release
+./install.sh --version 0.2.2-rc.1                            # 在线，显式版本
+./install.sh --github-proxy https://gitproxy.dev             # 在线，走 GitHub 加速代理
+./install.sh --archive ./dsh-v0.2.2-rc.1-linux-x64.tar.gz    # 离线，版本从归档名解析
+curl -fsSL https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.sh | sh
+```
+
+`--version`／`--base-url`／`--releases-api-url`／`--github-proxy`／`--prefix` 缺省时依次读取环境变量 `DSH_VERSION`／`DSH_BASE_URL`／`DSH_RELEASES_API_URL`／`DSH_GH_PROXY`／`DSH_PREFIX`（`curl ... | sh` 场景用环境变量传参）。代理行为与 Windows 一致：外层 `curl` 的 URL 需自行加代理前缀；解析失败时显式 `DSH_VERSION` 可绕开 api.github.com。
+
+完全离线的本地归档安装；校验和文件必须位于归档旁：
 
 ```sh
 ./install.sh \
-  --version 0.2.2-rc.1 \
   --archive ./dsh-v0.2.2-rc.1-linux-x64.tar.gz
 ```
 
 ```powershell
 .\install.ps1 `
-  -Version 0.2.2-rc.1 `
   -Archive .\dsh-v0.2.2-rc.1-win-x64.zip
 ```
 
@@ -154,6 +193,8 @@ install.ps1
 - 归档包含绝对路径或 `..` 路径项：硬失败。
 - 安装后版本输出不符：硬失败。
 - 下载失败：返回非零，不自动切换镜像或版本。
+- 版本自动解析（未指定 `-Version` 时）失败，或排除 dev/alpha 后无可用 release：硬失败。
+- 离线归档文件名无法推断版本，或平台与当前系统不符：硬失败。
 
 ## 性能实验记录
 

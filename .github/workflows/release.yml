@@ -60,6 +60,9 @@ jobs:
         run: node scripts/verify-standalone.mjs --archive "dist/dsh-v${{ steps.meta.outputs.version }}-${{ matrix.platform }}-x64.${{ matrix.extension }}" --version "${{ steps.meta.outputs.version }}" --platform "${{ matrix.platform }}"
       - name: Exercise installer success and forced-failure branches
         run: node tests/installer-regression.mjs --archive "dist/dsh-v${{ steps.meta.outputs.version }}-${{ matrix.platform }}-x64.${{ matrix.extension }}" --version "${{ steps.meta.outputs.version }}"
+      - name: Exercise irm/iex one-line installer entry
+        if: matrix.platform == 'win'
+        run: node tests/installer-irm-regression.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: standalone-${{ matrix.platform }}-x64

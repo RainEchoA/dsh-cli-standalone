@@ -4,14 +4,23 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  ./install.sh --version <dsh-version> [options]
+  ./install.sh [options]
 
 Options:
-  --archive <file>       Install a local dsh-v<version>-linux-x64.tar.gz
-  --checksum <sha256>    Expected archive checksum; otherwise read <archive>.sha256
-  --prefix <directory>   Installation prefix (default: $HOME/.local)
-  --base-url <url>       Release download URL without a trailing slash
-  --no-modify-path       Do not append $prefix/bin to $HOME/.profile
+  --version <dsh-version>   Explicit dsh version; when omitted, the newest release of this
+                            repo is resolved automatically (dev/alpha prereleases excluded)
+  --archive <file>          Install a local dsh-v<version>-linux-x64.tar.gz; when --version
+                            is omitted the version is inferred from the archive file name
+  --checksum <sha256>       Expected archive checksum; otherwise read <archive>.sha256
+  --prefix <directory>      Installation prefix (default: $HOME/.local)
+  --base-url <url>          Release download URL without a trailing slash
+  --releases-api-url <url>  Release listing API used for version resolution
+  --github-proxy <url>      GitHub acceleration proxy (e.g. https://gitproxy.dev); rewrites
+                            default GitHub URLs into "<proxy>/<original url>"
+  --no-modify-path          Do not append $prefix/bin to $HOME/.profile
+
+Environment: DSH_VERSION, DSH_BASE_URL, DSH_RELEASES_API_URL, DSH_GH_PROXY and
+DSH_PREFIX are honored when the matching option is not given.
 
 Without --archive, both the archive and its .sha256 file are downloaded from:
   https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v<version>/
@@ -27,17 +36,94 @@ need() {
   command -v "$1" >/dev/null 2>&1 || fail "required tool not found: $1"
 }
 
-version=
+# Optional GitHub acceleration proxy (e.g. https://gitproxy.dev): rewrites default GitHub
+# URLs into "<proxy>/<original url>". Explicit non-GitHub URLs (custom mirrors) pass through.
+github_url() {
+  if [ -z "$github_proxy" ]; then
+    printf '%s' "$1"
+    return
+  fi
+  case $1 in
+    http://github.com/*|https://github.com/*|http://raw.githubusercontent.com/*|https://raw.githubusercontent.com/*|http://api.github.com/*|https://api.github.com/*|http://codeload.github.com/*|https://codeload.github.com/*)
+      printf '%s/%s' "${github_proxy%/}" "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# Semver parse/compare + dev/alpha exclusion, mirroring scripts/scan-latest-version.mjs and
+# install.ps1 so every entry point resolves the same "latest" version.
+resolve_latest_awk=$(cat <<'AWK'
+function cmp_core(a, b, x, y, i) {
+  split(a, x, "."); split(b, y, ".")
+  for (i = 1; i <= 3; i++) {
+    if (x[i] + 0 != y[i] + 0) return x[i] + 0 < y[i] + 0 ? -1 : 1
+  }
+  return 0
+}
+function cmp(a_core, a_pre, a_n, b_core, b_pre, b_n, ap, bp, i, an, bn, anum, bnum, c) {
+  c = cmp_core(a_core, b_core); if (c != 0) return c
+  if (a_n == 0 && b_n == 0) return 0
+  if (a_n == 0) return 1
+  if (b_n == 0) return -1
+  split(a_pre, ap, "."); split(b_pre, bp, ".")
+  for (i = 1; i <= (a_n > b_n ? a_n : b_n); i++) {
+    if (i > a_n) return -1
+    if (i > b_n) return 1
+    an = ap[i]; bn = bp[i]
+    anum = (an ~ /^[0-9]+$/); bnum = (bn ~ /^[0-9]+$/)
+    if (anum && bnum) { if (an + 0 != bn + 0) return an + 0 < bn + 0 ? -1 : 1 }
+    else if (anum != bnum) return anum ? -1 : 1
+    else if (an != bn) return an < bn ? -1 : 1
+  }
+  return 0
+}
+{
+  v = $0
+  sub(/^v/, "", v)
+  if (v !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/) next
+  core = v; pre = ""; npre = 0
+  dash = index(v, "-")
+  if (dash > 0) { core = substr(v, 1, dash - 1); pre = substr(v, dash + 1); npre = split(pre, tmp, ".") }
+  if (npre > 0 && (tolower(tmp[1]) == "dev" || tolower(tmp[1]) == "alpha")) next
+  if (have == 0 || cmp(core, pre, npre, best_core, best_pre, best_n) > 0) {
+    have = 1; best_core = core; best_pre = pre; best_n = npre; best = v
+  }
+}
+END { if (have) print best }
+AWK
+)
+
+resolve_latest_version() {
+  rl_api=$(github_url "$releases_api_url")
+  case $rl_api in
+    *\?*) rl_api="$rl_api&per_page=100" ;;
+    *) rl_api="$rl_api?per_page=100" ;;
+  esac
+  echo "Resolving latest dsh release from $rl_api" >&2
+  if [ "$downloader" = curl ]; then
+    rl_json=$(curl --fail --location --silent --show-error --connect-timeout 20 --max-time 120 "$rl_api") || fail "failed to list dsh releases from $rl_api"
+  else
+    rl_json=$(wget -q -O - "$rl_api") || fail "failed to list dsh releases from $rl_api"
+  fi
+  rl_best=$(printf '%s' "$rl_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/^"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*$/\1/' | awk "$resolve_latest_awk")
+  [ -n "$rl_best" ] || fail "no installable dsh release found at $rl_api (dev/alpha prereleases excluded)"
+  echo "Resolved dsh version: $rl_best (from the release list)" >&2
+  printf '%s' "$rl_best"
+}
+
+version=${DSH_VERSION:-}
 archive=
 checksum=
 prefix=${DSH_PREFIX:-"$HOME/.local"}
-base_url=https://github.com/RainEchoA/dsh-cli-standalone/releases/download
+base_url=${DSH_BASE_URL:-https://github.com/RainEchoA/dsh-cli-standalone/releases/download}
+releases_api_url=${DSH_RELEASES_API_URL:-https://api.github.com/repos/RainEchoA/dsh-cli-standalone/releases}
+github_proxy=${DSH_GH_PROXY:-}
 modify_path=1
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
-    --version|--archive|--checksum|--prefix|--base-url)
+    --version|--archive|--checksum|--prefix|--base-url|--releases-api-url|--github-proxy)
       [ "$#" -ge 2 ] || fail "$1 requires a value"
       case "$1" in
         --version) version=$2 ;;
@@ -45,6 +131,8 @@ while [ "$#" -gt 0 ]; do
         --checksum) checksum=$2 ;;
         --prefix) prefix=$2 ;;
         --base-url) base_url=$2 ;;
+        --releases-api-url) releases_api_url=$2 ;;
+        --github-proxy) github_proxy=$2 ;;
       esac
       shift 2
       ;;
@@ -53,16 +141,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$version" ] || { usage >&2; fail "--version is required; there is no implicit latest-version fallback"; }
-case "$version" in
-  *[!0-9A-Za-z._-]*|'') fail "unsafe version string: $version" ;;
-esac
 [ "$(uname -s)" = Linux ] || fail "this installer supports Linux only"
 [ "$(uname -m)" = x86_64 ] || fail "unsupported architecture $(uname -m); only x86_64 is supported"
 need uname
 need awk
 need tar
 need getconf
+need basename
+need grep
+need sed
 
 libc_version=$(getconf GNU_LIBC_VERSION 2>/dev/null) || fail "GNU libc was not detected; musl/Alpine is not supported"
 libc_version=${libc_version#glibc }
@@ -82,6 +169,49 @@ fi
 case "$prefix" in
   *"'"*|*'
 '*) fail "prefix cannot contain a single quote or newline" ;;
+esac
+
+if command -v curl >/dev/null 2>&1; then
+  downloader=curl
+elif command -v wget >/dev/null 2>&1; then
+  downloader=wget
+else
+  fail "required downloader not found: curl or wget"
+fi
+
+# Version resolution, in priority order: explicit --version, archive file name, latest release.
+if [ -n "$archive" ]; then
+  archive_name=$(basename -- "$archive")
+  case "$archive_name" in
+    dsh-v*-win-x64.zip)
+      inferred_platform=win
+      inferred=${archive_name#dsh-v}
+      inferred=${inferred%-win-x64.zip}
+      ;;
+    dsh-v*-linux-x64.tar.gz)
+      inferred_platform=linux
+      inferred=${archive_name#dsh-v}
+      inferred=${inferred%-linux-x64.tar.gz}
+      ;;
+    *)
+      inferred_platform=
+      inferred=
+      ;;
+  esac
+  if [ -z "$version" ]; then
+    [ -n "$inferred" ] || fail "cannot determine the dsh version from archive name '$archive_name'; rename it to dsh-v<version>-linux-x64.tar.gz or pass --version explicitly"
+    version=$inferred
+    echo "Resolved dsh version: $version (from archive name '$archive_name')"
+  fi
+  if [ -n "$inferred_platform" ] && [ "$inferred_platform" != "linux" ]; then
+    fail "archive '$archive_name' is a $inferred_platform-x64 build; this installer only supports linux-x64 archives"
+  fi
+fi
+if [ -z "$version" ]; then
+  version=$(resolve_latest_version)
+fi
+case "$version" in
+  *[!0-9A-Za-z._-]*|'') fail "unsafe version string: $version" ;;
 esac
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/dsh-install.XXXXXX") || fail "mktemp failed"
@@ -112,14 +242,6 @@ if [ -n "$archive" ]; then
   fi
 else
   url=$base_url/v$version
-  need basename
-  if command -v curl >/dev/null 2>&1; then
-    downloader=curl
-  elif command -v wget >/dev/null 2>&1; then
-    downloader=wget
-  else
-    fail "required downloader not found: curl or wget"
-  fi
   echo "Resolved dsh version: $version"
   echo "Download base URL: $url"
   if [ -n "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${HTTP_PROXY:-}" ]; then
@@ -128,11 +250,11 @@ else
     echo "Proxy environment: not set"
   fi
   if [ "$downloader" = curl ]; then
-    curl --fail --location --silent --show-error --connect-timeout 20 --max-time 600 --output "$work/$name" "$url/$name" || fail "archive download failed: $url/$name"
-    curl --fail --location --silent --show-error --connect-timeout 20 --max-time 120 --output "$work/$name.sha256" "$url/$name.sha256" || fail "checksum download failed: $url/$name.sha256"
+    curl --fail --location --silent --show-error --connect-timeout 20 --max-time 600 --output "$work/$name" "$(github_url "$url/$name")" || fail "archive download failed: $url/$name"
+    curl --fail --location --silent --show-error --connect-timeout 20 --max-time 120 --output "$work/$name.sha256" "$(github_url "$url/$name.sha256")" || fail "checksum download failed: $url/$name.sha256"
   else
-    wget -q -O "$work/$name" "$url/$name" || fail "archive download failed: $url/$name"
-    wget -q -O "$work/$name.sha256" "$url/$name.sha256" || fail "checksum download failed: $url/$name.sha256"
+    wget -q -O "$work/$name" "$(github_url "$url/$name")" || fail "archive download failed: $url/$name"
+    wget -q -O "$work/$name.sha256" "$(github_url "$url/$name.sha256")" || fail "checksum download failed: $url/$name.sha256"
   fi
   archive=$work/$name
   checksum=$(awk -v file="$name" '{ value=$2; sub(/^\*/, "", value); if (value == file) { print $1; exit } }' "$archive.sha256")
@@ -196,9 +318,11 @@ if [ "$modify_path" -eq 1 ] && [ "$path_ready" -eq 0 ]; then
   if ! grep -F "export PATH='$prefix/bin'" "$profile" >/dev/null 2>&1; then
     printf "\n%s\nexport PATH='%s/bin':\"\$PATH\"\n" "$path_marker" "$prefix" >> "$profile" || fail "cannot update $profile"
   fi
-  echo "Updated $profile; open a new shell or source it to refresh PATH"
-elif [ "$modify_path" -eq 0 ]; then
-  echo "PATH modification disabled; add $prefix/bin to PATH manually"
+  echo "Updated $profile; open a new shell or source it to use 'dsh'"
+elif [ "$modify_path" -eq 1 ]; then
+  echo "$prefix/bin is already on your PATH"
+else
+  echo "PATH was not modified; add $prefix/bin to your PATH to use 'dsh' from any shell"
 fi
 
 mv "$work/new-shim" "$shim" || fail "failed to activate $shim"

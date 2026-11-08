@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -53,7 +54,7 @@ function installerInvocation(root, platform, installerArgs) {
   return ['sh', [join(root, 'install.sh'), ...installerArgs]]
 }
 
-function main() {
+async function main() {
   const options = args()
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const archive = resolve(options.archive)
@@ -67,6 +68,46 @@ function main() {
   const runInstaller = (installerArgs, env = process.env) => {
     const [command, commandArgs] = installerInvocation(root, platform, installerArgs)
     return invoke(command, commandArgs, { env })
+  }
+  // Version resolution must skip dev/alpha prereleases and pick the semver maximum on any
+  // platform. The proxy flag under test points at this stub server, so the version API
+  // and download requests must arrive rewritten as "<proxy>/https://api.github.com/..."
+  // and "<proxy>/https://github.com/..."; the download then 404s on purpose, so the run
+  // must fail while still having logged which version it resolved.
+  const exerciseResolution = async (proxyFlag) => {
+    const releaseTags = ['v2.0.0-alpha.1', 'v2.0.0-dev.3', 'v1.0.1-rc.1', 'v1.0.0', 'v0.3.0-beta.1', 'v0.2.9', 'not-a-semver']
+    const requestedPaths = []
+    const apiServer = createServer((req, res) => {
+      const url = new URL(req.url, 'http://127.0.0.1')
+      requestedPaths.push(url.pathname)
+      if (url.pathname.endsWith('/releases')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(releaseTags.map((tag) => ({ tag_name: tag }))))
+        return
+      }
+      res.writeHead(404, { 'content-type': 'text/plain' })
+      res.end('not found')
+    })
+    await new Promise((listen) => apiServer.listen(0, '127.0.0.1', listen))
+    try {
+      const apiPort = apiServer.address().port
+      const resolvedPrefix = join(temp, `resolved-prefix-${platform}`)
+      const resolutionResult = runInstaller([
+        proxyFlag, `http://127.0.0.1:${apiPort}`,
+        prefixFlag, resolvedPrefix, noPathFlag,
+      ], env)
+      assertFailure(resolutionResult, 'latest-release resolution excludes dev/alpha', 'resolved dsh version: 1.0.1-rc.1')
+      if (existsSync(resolvedPrefix)) throw new Error('Resolution failure created the installation prefix')
+      if (!requestedPaths.some((p) => p.startsWith('/https://api.github.com/'))) {
+        throw new Error(`version API was not rewritten through the proxy: ${JSON.stringify(requestedPaths)}`)
+      }
+      if (!requestedPaths.some((p) => p.startsWith('/https://github.com/'))) {
+        throw new Error(`release download was not rewritten through the proxy: ${JSON.stringify(requestedPaths)}`)
+      }
+      console.log('PASS: GitHub proxy rewriting applied to version API and downloads')
+    } finally {
+      await new Promise((close) => apiServer.close(close))
+    }
   }
   try {
     const isolated = join(temp, 'isolated')
@@ -142,10 +183,69 @@ function main() {
     assertSuccess(result, 'previous launcher survives a failed reinstall')
     if (result.output.trim() !== options.version) throw new Error('Previous launcher changed after failed reinstall')
 
+    if (platform === 'win') {
+      const inferredPrefix = join(temp, 'inferred-version-prefix')
+      result = runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
+      assertSuccess(result, 'archive-name version inference installation')
+      if (!result.output.toLowerCase().includes('resolved dsh version')) {
+        throw new Error(`Version inference was not reported\n${result.output}`)
+      }
+      const inferredShim = join(inferredPrefix, 'bin', 'dsh.cmd')
+      result = invoke(inferredShim, ['--version'], { env })
+      assertSuccess(result, 'inferred-version shim execution')
+      if (result.output.trim() !== options.version) throw new Error(`Inferred-version shim returned ${result.output.trim()}`)
+
+      const renamedArchive = join(temp, 'package.zip')
+      copyFileSync(archive, renamedArchive)
+      const renamedPrefix = join(temp, 'renamed-prefix')
+      result = runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag], env)
+      assertFailure(result, 'archive name without version information', 'version')
+      if (existsSync(renamedPrefix)) throw new Error('Unnamed-archive failure created the installation prefix')
+
+      const foreignArchive = join(temp, `dsh-v${options.version}-linux-x64.tar.gz`)
+      copyFileSync(archive, foreignArchive)
+      const foreignPrefix = join(temp, 'foreign-prefix')
+      result = runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
+      assertFailure(result, 'foreign-platform archive', 'win-x64')
+      if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
+
+      await exerciseResolution('-GitHubProxy')
+    } else {
+      const inferredPrefix = join(temp, 'inferred-version-prefix')
+      result = runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
+      assertSuccess(result, 'archive-name version inference installation')
+      if (!result.output.toLowerCase().includes('resolved dsh version')) {
+        throw new Error(`Version inference was not reported\n${result.output}`)
+      }
+      const inferredShim = join(inferredPrefix, 'bin', 'dsh')
+      result = invoke(inferredShim, ['--version'], { env })
+      assertSuccess(result, 'inferred-version shim execution')
+      if (result.output.trim() !== options.version) throw new Error(`Inferred-version shim returned ${result.output.trim()}`)
+
+      const renamedArchive = join(temp, 'package.tar.gz')
+      copyFileSync(archive, renamedArchive)
+      const renamedPrefix = join(temp, 'renamed-prefix')
+      result = runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag], env)
+      assertFailure(result, 'archive name without version information', 'version')
+      if (existsSync(renamedPrefix)) throw new Error('Unnamed-archive failure created the installation prefix')
+
+      const foreignArchive = join(temp, `dsh-v${options.version}-win-x64.zip`)
+      copyFileSync(archive, foreignArchive)
+      const foreignPrefix = join(temp, 'foreign-prefix')
+      result = runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
+      assertFailure(result, 'foreign-platform archive', 'linux-x64')
+      if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
+
+      await exerciseResolution('--github-proxy')
+    }
+
     console.log('INSTALLER_REGRESSION_PASS')
   } finally {
     rmSync(temp, { recursive: true, force: true })
   }
 }
 
-main()
+main().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})
