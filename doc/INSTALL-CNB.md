@@ -12,7 +12,7 @@
 | Release 列表 | <https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases> |
 | 单个附件下载 | `https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases/download/<tag>/<文件名>` |
 | 仓库原始文件（raw） | `https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/<路径>` |
-| 同步策略 | 每天 01:00（Asia/Shanghai）定时任务自动同步 GitHub Release 产物 |
+| 同步策略 | 每天 03:00（Asia/Shanghai）定时任务自动同步 GitHub Release 产物 |
 
 CNB 仓库是 GitHub 源仓库的**只读镜像 + 产物分发点**：代码与 tag 随源仓库同步，Release 附件由定时任务搬运，
 **不在 CNB 上执行任何构建**（仓库流水线「推送自动触发」已关闭，仅保留「定时任务自动触发」）。
@@ -81,7 +81,7 @@ Windows 产物为 `dsh-v0.2.2-rc.1-win-x64.zip`（附同名 `.sha256`）。
 
 | 触发方式 | 说明 |
 | --- | --- |
-| `crontab: 0 1 * * *` | 每天 01:00（Asia/Shanghai）自动检查并同步 |
+| `crontab: 0 3 * * *` | 每天 03:00（Asia/Shanghai）自动检查并同步 |
 | `web_trigger` | 仓库页面「云原生构建」手动点击运行 |
 | `api_trigger` | `cnb-rs build start -e api_trigger` / OPENAPI 触发 |
 
@@ -151,7 +151,8 @@ CNB 的 Release 列表接口（`https://api.cnb.cool/<group>/<repo>/-/releases`�
 <https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases>。
 
 **Q：CNB 上的产物和 GitHub 不一致？**
-定时任务每天 01:00 同步一次；也可手动触发 `web_trigger` / `api_trigger` 流水线立即同步。
+定时任务每天 03:00 同步一次（GitHub 侧扫描/构建在 21:00 之后进行，CNB 侧等其结束再搬运产物）；
+也可手动触发 `web_trigger` / `api_trigger` 流水线立即同步。
 
 **Q：能改成从 CNB 自动解析最新版吗？**
 可以，但需要给版本列表接口加上可访问的令牌地址（例如自建代理或带令牌的镜像 API），

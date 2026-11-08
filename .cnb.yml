@@ -1,6 +1,6 @@
 # CNB 云原生构建配置
 #
-# 目标：每天凌晨 1 点（Asia/Shanghai）自动完成三件事
+# 目标：每天凌晨 3 点（Asia/Shanghai）自动完成三件事
 #       1) 把 GitHub 的全部分支 / tag / 完整提交历史镜像到本 CNB 仓库
 #       2) 把 GitHub Release 的说明与附件同步到本仓库的 CNB Release
 #       3) 用 doc/INSTALL-CNB.md 重新生成 CNB 主页 README.md
@@ -9,7 +9,7 @@
 # - 读取 GitHub 全部使用匿名访问（公开仓库，无需任何 Token / 密钥）。
 # - 写入 CNB 使用流水线内置的 CNB_TOKEN（构建结束自动销毁，仅限当前仓库）。
 # - 触发方式：
-#     crontab 0 1 * * *   每天 01:00 定时
+#     crontab 0 3 * * *   每天 03:00 定时（避开 GitHub 21:00 扫描/构建高峰）
 #     web_trigger        页面通用按钮
 #     web_trigger_sync   页面按钮「立即同步 GitHub 产物」
 #     api_trigger        cnb-rs build start -e api_trigger / OPENAPI
@@ -21,8 +21,10 @@
 #   - CNB 附件插件：https://cnb.cool/cnb/plugins/cnbcool/attachments
 
 main:
-  # ---------------------------------------------------------------- 定时：每天 01:00
-  "crontab: 0 1 * * *": &sync_pipelines
+  # ---------------------------------------------------------------- 定时：每天 03:00
+  # GitHub 侧 daily-version-scan 每天 21:00（北京时间）启动扫描并可能触发 release 构建，
+  # CNB 侧放在 03:00，等 GitHub 构建结束、产物可取后再同步，避免排队。
+  "crontab: 0 3 * * *": &sync_pipelines
     - name: sync-from-github
       env:
         GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
