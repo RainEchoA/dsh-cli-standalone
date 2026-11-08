@@ -5,6 +5,7 @@
 // no GitHub access is required, nothing real is installed, and the user PATH is never
 // touched.
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -68,11 +69,11 @@ async function main() {
   const archive = join(temp, `dsh-v${version}-win-x64.zip`)
   const build = await invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
-    `[IO.Compression.ZipFile]::CreateFromDirectory('${staging}', '${archive}'); ` +
-    `$h = (Get-FileHash -LiteralPath '${archive}' -Algorithm SHA256).Hash.ToLower(); ` +
-    `Set-Content -LiteralPath '${archive}.sha256' -Encoding Ascii -Value ($h + '  dsh-v${version}-win-x64.zip')`,
+    `[IO.Compression.ZipFile]::CreateFromDirectory('${staging}', '${archive}')`,
   ])
-  if (build.status !== 0) throw new Error(`fake archive build failed\n${build.output}`)
+  if (build.status !== 0 || !existsSync(archive)) throw new Error(`fake archive build failed\n${build.output}`)
+  const hash = createHash('sha256').update(readFileSync(archive)).digest('hex')
+  writeFileSync(`${archive}.sha256`, `${hash}  dsh-v${version}-win-x64.zip\n`)
 
   const releaseTags = ['v2.0.0-alpha.1', 'v2.0.0-dev.3', 'v1.0.1-rc.1', 'v1.0.0', 'v0.3.0-beta.1', 'v0.2.9']
   const requestedPaths = []
