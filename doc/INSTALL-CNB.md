@@ -85,6 +85,18 @@ Windows 产物为 `dsh-v0.2.2-rc.1-win-x64.zip`（附同名 `.sha256`）。
 | `web_trigger` | 仓库页面「云原生构建」手动点击运行 |
 | `api_trigger` | `cnb-rs build start -e api_trigger` / OPENAPI 触发 |
 
+### 页面自定义按钮
+
+在 **代码 → 分支详情页（main）** 顶部可直接点击（配置见 `.cnb/web_trigger.yml`）：
+
+| 按钮 | 事件 | 作用 |
+| --- | --- | --- |
+| 立即同步 GitHub 产物 | `web_trigger_sync` | 全量：代码镜像 + Release 产物 + 主页 README（默认按钮） |
+| 仅同步 Release 产物 | `web_trigger_sync_release` | 只搬运 Release 附件，不动代码 |
+| 刷新主页 README | `web_trigger_readme` | 用 `doc/INSTALL-CNB.md` 重新生成主页 README |
+
+> 按钮仅在「代码-分支详情页」显示；需要有仓库写权限才能触发。
+
 每条流水线包含三个 Stage：
 
 | Stage | 镜像 | 作用 |
@@ -122,6 +134,7 @@ bash scripts/sync-cnb.sh --repo aixx.work/dsh-cli-standalone
 | 工具 | 用途 |
 | --- | --- |
 | [tencentcom/git-sync](https://cnb.cool/cnb/plugins/tencentcom/git-sync) | **官方代码同步插件**：pull 模式从 GitHub 拉取全部分支/tag/提交历史推到 CNB（本仓库用它做定时全量同步） |
+| [.cnb/web_trigger.yml](https://docs.cnb.cool/zh/build/web-trigger.html) | 仓库页面自定义按钮（手动触发流水线） |
 | [mpgrm](https://cnb.cool/zhiqiangwang/mpgrm)（gsync 继任者） | 跨平台同步 Release 与附件，镜像 `docker.cnb.cool/zhiqiangwang/mpgrm:latest` |
 | [cnbcool/attachments](https://cnb.cool/cnb/plugins/cnbcool/attachments) | 官方附件插件，在流水线里给 Release 上传 / 下载附件 |
 | [git-cnb](https://cnb.cool/looc/git-cnb) | `git` 风格的 CNB 命令行扩展，可在流水线里查 Release 等信息 |
