@@ -15,7 +15,7 @@
 #   DSH_PREFIX           Install location (default %LOCALAPPDATA%\Programs\dsh)
 #   DSH_BASE_URL         Release download base URL
 #   DSH_RELEASES_API_URL Release listing API used for version resolution
-#   DSH_GH_PROXY         GitHub acceleration proxy (e.g. https://gitproxy.dev)
+#   DSH_GH_PROXY         GitHub acceleration proxy (e.g. https://api.gitproxy.dev)
 #   DSH_NO_MODIFY_PATH   Non-empty: skip the user PATH update
 
 $dshOuterErrorAction = $ErrorActionPreference

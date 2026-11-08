@@ -72,12 +72,12 @@ irm https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.
 - `DSH_PREFIX`：安装位置，默认 `%LOCALAPPDATA%\Programs\dsh`。
 - `DSH_NO_MODIFY_PATH`：非空时禁止修改用户 PATH。
 - `DSH_BASE_URL`／`DSH_RELEASES_API_URL`：release 下载／版本解析 API 的基础地址（镜像、气隙环境）。
-- `DSH_GH_PROXY`：GitHub 加速代理（如 `https://gitproxy.dev`）；把默认 GitHub 地址（安装脚本、版本 API、release 下载）重写为 `<代理>/<原 URL>`，显式指定的 URL 参数不被重写。
+- `DSH_GH_PROXY`：GitHub 加速代理（如 `https://api.gitproxy.dev`）；把默认 GitHub 地址（安装脚本、版本 API、release 下载）重写为 `<代理>/<原 URL>`，显式指定的 URL 参数不被重写。
 
 版本解析与下载依赖 GitHub API、raw.githubusercontent.com 及 GitHub Release 可达；气隙环境可把上述地址指向镜像。GitHub 直连受限时可用加速代理（外层 `irm` 的 URL 需自行加代理前缀；代理对 api.github.com 的支持因服务而异，解析失败时请显式设置 `DSH_VERSION`）：
 
 ```powershell
-$env:DSH_GH_PROXY = 'https://gitproxy.dev'
+$env:DSH_GH_PROXY = 'https://api.gitproxy.dev'
 irm "$env:DSH_GH_PROXY/https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.ps1" | iex
 ```
 

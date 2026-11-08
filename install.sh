@@ -15,8 +15,8 @@ Options:
   --prefix <directory>      Installation prefix (default: $HOME/.local)
   --base-url <url>          Release download URL without a trailing slash
   --releases-api-url <url>  Release listing API used for version resolution
-  --github-proxy <url>      GitHub acceleration proxy (e.g. https://gitproxy.dev); rewrites
-                            default GitHub URLs into "<proxy>/<original url>"
+  --github-proxy <url>      GitHub acceleration proxy (e.g. https://api.gitproxy.dev);
+                            rewrites default GitHub URLs into "<proxy>/<original url>"
   --no-modify-path          Do not append $prefix/bin to $HOME/.profile
 
 Environment: DSH_VERSION, DSH_BASE_URL, DSH_RELEASES_API_URL, DSH_GH_PROXY and
