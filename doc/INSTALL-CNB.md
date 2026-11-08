@@ -85,12 +85,23 @@ Windows 产物为 `dsh-v0.2.2-rc.1-win-x64.zip`（附同名 `.sha256`）。
 | `web_trigger` | 仓库页面「云原生构建」手动点击运行 |
 | `api_trigger` | `cnb-rs build start -e api_trigger` / OPENAPI 触发 |
 
+每条流水线包含三个 Stage：
+
+| Stage | 镜像 | 作用 |
+| --- | --- | --- |
+| `sync-code-from-github` | `tencentcom/git-sync` | **全量提交历史同步**：拉取模式下把 GitHub 的所有分支与 tag（含完整 commit 历史）推到本仓库；`push_tags: true` 对齐 tag，`force: true` 允许覆盖 |
+| `sync-release` | `node:22` | 同步 GitHub Release 的说明与附件（幂等） |
+| `update-home-readme` | `node:22` | 由 `doc/INSTALL-CNB.md` 重新生成主页 `README.md` 并提交 |
+
 同步脚本的行为：
 
 1. **读 GitHub 走匿名访问**：源仓库是公开的，不使用任何 Token / 密钥，只依赖 GitHub 公开 API。
 2. **写 CNB 用流水线内置 `CNB_TOKEN`**：构建结束自动销毁，权限限定在当前仓库。
 3. **幂等**：附件名与大小一致即跳过，不重复下载、不重复上传；体积变化或新增附件才补传。
 4. **不触发构建**：仓库设置里「推送自动触发」为关闭状态，只有定时任务会跑起来。
+5. **提交历史**：CNB 仓库保留 GitHub 的全部 commit（当前 19 个 GitHub 提交 + CNB 侧文档提交），可用
+   `GET https://api.cnb.cool/aixx.work/dsh-cli-standalone/-/git/commits?page_size=100` 查看
+   （注意分页参数是 `page_size`，不是 `per_page`）。
 
 手动触发一次：
 
@@ -110,6 +121,7 @@ bash scripts/sync-cnb.sh --repo aixx.work/dsh-cli-standalone
 
 | 工具 | 用途 |
 | --- | --- |
+| [tencentcom/git-sync](https://cnb.cool/cnb/plugins/tencentcom/git-sync) | **官方代码同步插件**：pull 模式从 GitHub 拉取全部分支/tag/提交历史推到 CNB（本仓库用它做定时全量同步） |
 | [mpgrm](https://cnb.cool/zhiqiangwang/mpgrm)（gsync 继任者） | 跨平台同步 Release 与附件，镜像 `docker.cnb.cool/zhiqiangwang/mpgrm:latest` |
 | [cnbcool/attachments](https://cnb.cool/cnb/plugins/cnbcool/attachments) | 官方附件插件，在流水线里给 Release 上传 / 下载附件 |
 | [git-cnb](https://cnb.cool/looc/git-cnb) | `git` 风格的 CNB 命令行扩展，可在流水线里查 Release 等信息 |
