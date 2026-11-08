@@ -57,8 +57,15 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   fi
   log "镜像分支与 tag 到 ${CNB_REPO}"
   if [[ $DRY_RUN -eq 0 ]]; then
-    # 使用 --force：CNB 侧 README.md 由第 3 步生成，与 GitHub 不同，属正常分叉
-    git push --quiet --force cnb 'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+    # 分支：先 rebase 再快进推送（保留 CNB 侧自己的提交，如自动生成的 README）
+    git pull --quiet --rebase cnb main >/dev/null 2>&1 || git pull --quiet --rebase cnb main || true
+    git push --quiet cnb 'refs/heads/*:refs/heads/*' || {
+      log "分支推送失败，rebase 后重试"
+      git pull --quiet --rebase cnb main || true
+      git push --quiet cnb 'refs/heads/*:refs/heads/*'
+    }
+    # tag：强制对齐 GitHub（tag SHA 可能与 CNB 侧自动创建的 tag 不同）
+    git push --quiet --force cnb 'refs/tags/*:refs/tags/*'
   fi
 else
   log "当前目录不是 Git 仓库，跳过代码镜像"

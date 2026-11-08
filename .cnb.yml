@@ -35,6 +35,8 @@ main:
             sync_mode: pull
             push_tags: true
             force: true
+            # 允许覆盖本地同名标签，保证 CNB 上的 tag 与 GitHub 完全一致
+            fetch_options: "--force --prune"
             git_user: cnb-ci
             git_email: cnb-ci@aixx.me
         - name: sync-release
@@ -54,9 +56,11 @@ main:
             if git diff --cached --quiet; then
               echo "CNB 主页 README 无变化，跳过提交"
             else
-              git -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
-                commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
-              git push --quiet --force \
+              # core.hooksPath=/dev/null：绕过仓库自带的 git-lfs hook（node:22 镜像未装 git-lfs）
+              git -c core.hooksPath=/dev/null \
+                  -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
+                  commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
+              git -c core.hooksPath=/dev/null push --quiet --force \
                 "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
               echo "已更新 CNB 主页 README"
             fi
@@ -77,6 +81,8 @@ main:
             sync_mode: pull
             push_tags: true
             force: true
+            # 允许覆盖本地同名标签，保证 CNB 上的 tag 与 GitHub 完全一致
+            fetch_options: "--force --prune"
             git_user: cnb-ci
             git_email: cnb-ci@aixx.me
         - name: sync-release
@@ -96,9 +102,11 @@ main:
             if git diff --cached --quiet; then
               echo "CNB 主页 README 无变化，跳过提交"
             else
-              git -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
-                commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
-              git push --quiet --force \
+              # core.hooksPath=/dev/null：绕过仓库自带的 git-lfs hook（node:22 镜像未装 git-lfs）
+              git -c core.hooksPath=/dev/null \
+                  -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
+                  commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
+              git -c core.hooksPath=/dev/null push --quiet --force \
                 "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
               echo "已更新 CNB 主页 README"
             fi
@@ -119,6 +127,8 @@ main:
             sync_mode: pull
             push_tags: true
             force: true
+            # 允许覆盖本地同名标签，保证 CNB 上的 tag 与 GitHub 完全一致
+            fetch_options: "--force --prune"
             git_user: cnb-ci
             git_email: cnb-ci@aixx.me
         - name: sync-release
@@ -138,9 +148,11 @@ main:
             if git diff --cached --quiet; then
               echo "CNB 主页 README 无变化，跳过提交"
             else
-              git -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
-                commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
-              git push --quiet --force \
+              # core.hooksPath=/dev/null：绕过仓库自带的 git-lfs hook（node:22 镜像未装 git-lfs）
+              git -c core.hooksPath=/dev/null \
+                  -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
+                  commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
+              git -c core.hooksPath=/dev/null push --quiet --force \
                 "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
               echo "已更新 CNB 主页 README"
             fi
