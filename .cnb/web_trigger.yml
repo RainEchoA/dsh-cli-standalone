@@ -1,0 +1,32 @@
+# CNB 仓库页面自定义按钮（代码 → 分支详情页）
+#
+# 事件需与 .cnb.yml 中配置的 web_trigger_* 对应，否则无法触发。
+# 仅具备仓库写权限的用户可点击触发；permissions 可进一步限制角色。
+
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 立即同步 GitHub 产物
+        description: 同步 GitHub 全量代码与 Release 产物到 CNB
+        event: web_trigger_sync
+        isDefault: true
+        groupName: 同步操作
+        env:
+          GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
+          CNB_REPO: "aixx.work/dsh-cli-standalone"
+
+      - name: 仅同步 Release 产物
+        description: 只搬运 GitHub Release 的说明与附件（幂等，不改代码）
+        event: web_trigger_sync_release
+        groupName: 同步操作
+        env:
+          GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
+          CNB_REPO: "aixx.work/dsh-cli-standalone"
+
+      - name: 刷新主页 README
+        description: 用 doc/INSTALL-CNB.md 重新生成 CNB 主页 README
+        event: web_trigger_readme
+        groupName: 同步操作
+        env:
+          GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
+          CNB_REPO: "aixx.work/dsh-cli-standalone"
