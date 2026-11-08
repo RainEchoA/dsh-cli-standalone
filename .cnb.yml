@@ -29,7 +29,7 @@ main:
         - name: sync-release
           image: node:22
           script: |
-            set -euo pipefail
+            set -eu
             cd "${CNB_BUILD_WORKSPACE:-/workspace}"
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
@@ -44,7 +44,7 @@ main:
         - name: sync-release
           image: node:22
           script: |
-            set -euo pipefail
+            set -eu
             cd "${CNB_BUILD_WORKSPACE:-/workspace}"
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
@@ -59,7 +59,7 @@ main:
         - name: sync-release
           image: node:22
           script: |
-            set -euo pipefail
+            set -eu
             cd "${CNB_BUILD_WORKSPACE:-/workspace}"
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
