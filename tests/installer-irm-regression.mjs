@@ -4,7 +4,7 @@
 // server serves the real install.ps1 and the test builds a fake dsh archive locally, so
 // no GitHub access is required, nothing real is installed, and the user PATH is never
 // touched.
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -25,8 +25,10 @@ function assert(condition, label, detail = '') {
   console.error(`FAIL: ${label}${detail ? `\n${detail}` : ''}`)
 }
 
+// Async on purpose: while an installer child process runs, the in-process localhost
+// server must keep answering requests; spawnSync would freeze the event loop and
+// deadlock every case until its HTTP timeout.
 function invoke(command, commandArgs, options = {}) {
-  // Node refuses to spawn .cmd/.bat files without a shell since the CVE-2024-27980 fix.
   if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
     const quote = (value) => `"${String(value).replace(/"/g, '""')}"`
     const cmdline = `"${[quote(command), ...commandArgs.map(quote)].join(' ')}"`
@@ -34,12 +36,19 @@ function invoke(command, commandArgs, options = {}) {
     commandArgs = ['/d', '/s', '/c', cmdline]
     options = { ...options, windowsVerbatimArguments: true }
   }
-  const result = spawnSync(command, commandArgs, { encoding: 'utf8', ...options })
-  return { ...result, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
-}
-
-function runPs(command) {
-  return invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command])
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, commandArgs, { stdio: ['ignore', 'pipe', 'pipe'], ...options })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', rejectPromise)
+    child.on('close', (status, signal) => {
+      resolvePromise({ status, signal, stdout, stderr, output: `${stdout}${stderr}` })
+    })
+  })
 }
 
 async function main() {
@@ -57,12 +66,12 @@ async function main() {
   writeFileSync(join(fakeRoot, 'runtime', 'node.exe'), '')
   writeFileSync(join(fakeRoot, 'manifest.json'), '{}')
   const archive = join(temp, `dsh-v${version}-win-x64.zip`)
-  const build = runPs(
+  const build = await invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
     `[IO.Compression.ZipFile]::CreateFromDirectory('${staging}', '${archive}'); ` +
     `$h = (Get-FileHash -LiteralPath '${archive}' -Algorithm SHA256).Hash.ToLower(); ` +
     `Set-Content -LiteralPath '${archive}.sha256' -Encoding Ascii -Value ($h + '  dsh-v${version}-win-x64.zip')`,
-  )
+  ])
   if (build.status !== 0) throw new Error(`fake archive build failed\n${build.output}`)
 
   const releaseTags = ['v2.0.0-alpha.1', 'v2.0.0-dev.3', 'v1.0.1-rc.1', 'v1.0.0', 'v0.3.0-beta.1', 'v0.2.9']
@@ -89,89 +98,89 @@ async function main() {
   // iex, exactly like the documented command.
   const iexCommand = `iex (irm -UseBasicParsing http://127.0.0.1:${port}/install.ps1)`
 
-  const runCase = (name, caseEnv) => {
+  const runCase = async (name, caseEnv) => {
     const env = { ...process.env }
     for (const key of Object.keys(env)) {
       if (key.startsWith('DSH_')) delete env[key]
     }
     Object.assign(env, caseEnv)
-    const result = invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', iexCommand], { env })
-    return { result, output: result.output, prefix: caseEnv.DSH_PREFIX }
+    return invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', iexCommand], { env })
   }
 
-  const shimVersion = (prefix) => {
+  const shimVersion = async (prefix) => {
     const shim = join(prefix, 'bin', 'dsh.cmd')
     if (!existsSync(shim)) return { ok: false, detail: `shim missing at ${shim}` }
-    const run = invoke(shim, ['--version'])
+    const run = await invoke(shim, ['--version'])
     return { ok: run.status === 0 && run.output.trim() === version, detail: run.output }
   }
 
-  const userPath = () => runPs("[Environment]::GetEnvironmentVariable('Path', 'User')").stdout?.trim()
+  const userPath = async () =>
+    (await invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"])).stdout.trim()
 
   // 1. Full flow through iex: explicit DSH_VERSION + local archive + prefix with spaces.
   {
-    const pathBefore = userPath()
+    const pathBefore = await userPath()
     const prefix = join(temp, 'prefix with spaces')
-    const { result, output } = runCase('mapping', {
+    const result = await runCase('mapping', {
       DSH_VERSION: version,
       DSH_ARCHIVE: archive,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
     })
-    assert(result.status === 0, 'irm|iex full install exits zero', output)
-    assert(/installed dsh 0\.2\.2-rc\.1/i.test(output), 'install completion reported', output)
-    const shim = shimVersion(prefix)
+    assert(result.status === 0, 'irm|iex full install exits zero', result.output)
+    assert(/installed dsh 0\.2\.2-rc\.1/i.test(result.output), 'install completion reported', result.output)
+    const shim = await shimVersion(prefix)
     assert(shim.ok, 'installed shim reports the expected version', shim.detail)
-    assert(userPath() === pathBefore, 'DSH_NO_MODIFY_PATH left the user PATH unchanged')
+    assert((await userPath()) === pathBefore, 'DSH_NO_MODIFY_PATH left the user PATH unchanged')
   }
 
   // 2. Without DSH_VERSION the archive file name provides the version.
   {
     const prefix = join(temp, 'inferred prefix')
-    const { result, output } = runCase('inference', {
+    const result = await runCase('inference', {
       DSH_ARCHIVE: archive,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
     })
-    assert(result.status === 0, 'version inferred from archive name under iex', output)
-    assert(/from archive name/i.test(output), 'inference was reported', output)
-    const shim = shimVersion(prefix)
+    assert(result.status === 0, 'version inferred from archive name under iex', result.output)
+    assert(/from archive name/i.test(result.output), 'inference was reported', result.output)
+    const shim = await shimVersion(prefix)
     assert(shim.ok, 'inferred-version shim works', shim.detail)
   }
 
   // 3. Unsafe DSH_VERSION is rejected by the installer itself.
   {
-    const { result, output } = runCase('unsafe', {
+    const result = await runCase('unsafe', {
       DSH_VERSION: '../evil',
       DSH_ARCHIVE: archive,
       DSH_PREFIX: join(temp, 'unsafe prefix'),
       DSH_NO_MODIFY_PATH: '1',
     })
-    assert(result.status !== 0, 'unsafe DSH_VERSION fails non-zero', output)
-    assert(/unsafe version/i.test(output), 'unsafe version message surfaced', output)
+    assert(result.status !== 0, 'unsafe DSH_VERSION fails non-zero', result.output)
+    assert(/unsafe version/i.test(result.output), 'unsafe version message surfaced', result.output)
   }
 
   // 4. No version anywhere and a dead release API -> hard failure, not a silent guess.
   {
-    const { result, output } = runCase('noversion', {
+    const result = await runCase('noversion', {
       DSH_RELEASES_API_URL: `http://127.0.0.1:${port}/nope`,
       DSH_PREFIX: join(temp, 'noversion prefix'),
       DSH_NO_MODIFY_PATH: '1',
     })
-    assert(result.status !== 0, 'unresolvable version fails non-zero', output)
-    assert(/failed to list dsh releases/i.test(output), 'release API failure surfaced', output)
+    assert(result.status !== 0, 'unresolvable version fails non-zero', result.output)
+    assert(/failed to list dsh releases/i.test(result.output), 'release API failure surfaced', result.output)
   }
 
   // 5. DSH_GH_PROXY rewrites the version API and download URLs; resolution still works.
   {
     requestedPaths.length = 0
     const prefix = join(temp, 'proxy prefix')
-    const { result, output } = runCase('proxy', {
+    const result = await runCase('proxy', {
       DSH_GH_PROXY: `http://127.0.0.1:${port}`,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
     })
-    assert(result.status !== 0 && /resolved dsh version: 1\.0\.1-rc\.1/i.test(output), 'latest resolution through proxy picks 1.0.1-rc.1', output)
+    assert(result.status !== 0 && /resolved dsh version: 1\.0\.1-rc\.1/i.test(result.output), 'latest resolution through proxy picks 1.0.1-rc.1', result.output)
     assert(requestedPaths.some((p) => p.startsWith('/https://api.github.com/')), 'version API request rewritten through proxy', JSON.stringify(requestedPaths))
     assert(requestedPaths.some((p) => p.startsWith('/https://github.com/')), 'download request rewritten through proxy', JSON.stringify(requestedPaths))
   }

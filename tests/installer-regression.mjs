@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -16,6 +16,9 @@ function args() {
   return result
 }
 
+// Async on purpose: while an installer child process runs, the in-process localhost
+// release stub must keep answering requests; spawnSync would freeze the event loop and
+// deadlock every resolution case until its timeout.
 function invoke(command, commandArgs, options = {}) {
   // Node refuses to spawn .cmd/.bat files without a shell since the CVE-2024-27980 fix,
   // and shell:true misjoins arguments (it breaks paths containing spaces), so route them
@@ -27,20 +30,28 @@ function invoke(command, commandArgs, options = {}) {
     commandArgs = ['/d', '/s', '/c', cmdline]
     options = { ...options, windowsVerbatimArguments: true }
   }
-  const result = spawnSync(command, commandArgs, { encoding: 'utf8', ...options })
-  return {
-    ...result,
-    output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
-  }
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, commandArgs, { stdio: ['ignore', 'pipe', 'pipe'], ...options })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', rejectPromise)
+    child.on('close', (status, signal) => {
+      resolvePromise({ status, signal, stdout, stderr, output: `${stdout}${stderr}` })
+    })
+  })
 }
 
 function assertSuccess(result, label) {
-  if (result.error || result.status !== 0) throw new Error(`${label} failed (${result.status}): ${result.error?.message ?? ''}\n${result.output}`)
+  if (result.status !== 0) throw new Error(`${label} failed (${result.status}):\n${result.output}`)
   console.log(`PASS: ${label}`)
 }
 
 function assertFailure(result, label, expectedText) {
-  if (result.error || result.status === 0) throw new Error(`${label} unexpectedly succeeded\n${result.output}`)
+  if (result.status === 0) throw new Error(`${label} unexpectedly succeeded\n${result.output}`)
   if (expectedText && !result.output.toLowerCase().includes(expectedText.toLowerCase())) {
     throw new Error(`${label} did not report ${JSON.stringify(expectedText)}\n${result.output}`)
   }
@@ -65,7 +76,7 @@ async function main() {
   const prefixFlag = platform === 'win' ? '-Prefix' : '--prefix'
   const checksumFlag = platform === 'win' ? '-Checksum' : '--checksum'
   const noPathFlag = platform === 'win' ? '-NoModifyPath' : '--no-modify-path'
-  const runInstaller = (installerArgs, env = process.env) => {
+  const runInstaller = async (installerArgs, env = process.env) => {
     const [command, commandArgs] = installerInvocation(root, platform, installerArgs)
     return invoke(command, commandArgs, { env })
   }
@@ -92,7 +103,7 @@ async function main() {
     try {
       const apiPort = apiServer.address().port
       const resolvedPrefix = join(temp, `resolved-prefix-${platform}`)
-      const resolutionResult = runInstaller([
+      const resolutionResult = await runInstaller([
         proxyFlag, `http://127.0.0.1:${apiPort}`,
         prefixFlag, resolvedPrefix, noPathFlag,
       ], env)
@@ -115,7 +126,7 @@ async function main() {
     mkdirSync(isolated, { recursive: true })
     copyFileSync(archive, isolatedArchive)
     const noChecksumPrefix = join(temp, 'no-checksum-prefix')
-    let result = runInstaller([versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, noChecksumPrefix, noPathFlag])
+    let result = await runInstaller([versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, noChecksumPrefix, noPathFlag])
     assertSuccess(result, 'local archive without a checksum installs with verification skipped')
     if (!result.output.toLowerCase().includes('skipping')) {
       throw new Error(`Checksum skip was not reported\n${result.output}`)
@@ -126,7 +137,7 @@ async function main() {
     copyFileSync(archive, corruptArchive)
     writeFileSync(corruptArchive, Buffer.from([0]), { flag: 'a' })
     const corruptPrefix = join(temp, 'corrupt-prefix')
-    result = runInstaller([
+    result = await runInstaller([
       versionFlag, options.version, archiveFlag, corruptArchive, checksumFlag, '0'.repeat(64),
       prefixFlag, corruptPrefix, noPathFlag,
     ])
@@ -134,7 +145,7 @@ async function main() {
     if (existsSync(corruptPrefix)) throw new Error('Checksum failure created the installation prefix')
 
     const wrongVersionPrefix = join(temp, 'wrong-version-prefix')
-    result = runInstaller([
+    result = await runInstaller([
       versionFlag, '9.9.9', archiveFlag, archive, prefixFlag, wrongVersionPrefix, noPathFlag,
     ])
     assertFailure(result, 'archive/version mismatch', 'expected')
@@ -147,7 +158,7 @@ async function main() {
     let userPathBefore
     if (platform === 'win') {
       installArgs.push(noPathFlag)
-      userPathBefore = invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"]).stdout?.trim()
+      userPathBefore = (await invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"])).stdout.trim()
     }
     // The CI workflow exports DSH_VERSION at job level; scrub DSH_* so the installers
     // under test actually exercise version inference and release resolution.
@@ -156,13 +167,13 @@ async function main() {
       if (key.startsWith('DSH_')) delete scrubbed[key]
     }
     const env = { ...scrubbed, HOME: home, DSH_HOME: join(home, '.dsh') }
-    result = runInstaller(installArgs, env)
+    result = await runInstaller(installArgs, env)
     assertSuccess(result, 'valid local archive installation')
 
     const shim = platform === 'win'
       ? join(installPrefix, 'bin', 'dsh.cmd')
       : join(installPrefix, 'bin', 'dsh')
-    result = invoke(shim, ['--version'], { env })
+    result = await invoke(shim, ['--version'], { env })
     assertSuccess(result, 'installed shim execution')
     if (result.output.trim() !== options.version) throw new Error(`Installed shim returned ${result.output.trim()}`)
     if (platform === 'linux') {
@@ -172,50 +183,50 @@ async function main() {
       }
       console.log('PASS: Linux PATH profile update')
     } else {
-      const userPathAfter = invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"]).stdout?.trim()
+      const userPathAfter = (await invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"])).stdout.trim()
       if (userPathAfter !== userPathBefore) throw new Error('-NoModifyPath changed the Windows user PATH')
       console.log('PASS: Windows -NoModifyPath left user PATH unchanged')
     }
 
-    result = runInstaller(installArgs, env)
+    result = await runInstaller(installArgs, env)
     assertFailure(result, 'duplicate version installation', 'already installed')
-    result = invoke(shim, ['--version'], { env })
+    result = await invoke(shim, ['--version'], { env })
     assertSuccess(result, 'previous launcher and version directory survive duplicate rejection')
     if (result.output.trim() !== options.version) throw new Error('Previous launcher changed after duplicate rejection')
 
-    result = runInstaller([
+    result = await runInstaller([
       versionFlag, options.version, archiveFlag, corruptArchive, checksumFlag, '0'.repeat(64),
       prefixFlag, installPrefix, noPathFlag,
     ], env)
     assertFailure(result, 'tampered reinstall', 'checksum mismatch')
-    result = invoke(shim, ['--version'], { env })
+    result = await invoke(shim, ['--version'], { env })
     assertSuccess(result, 'previous launcher survives a failed reinstall')
     if (result.output.trim() !== options.version) throw new Error('Previous launcher changed after failed reinstall')
 
     if (platform === 'win') {
       const inferredPrefix = join(temp, 'inferred-version-prefix')
       copyFileSync(`${archive}.sha256`, `${isolatedArchive}.sha256`)
-      result = runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
       assertSuccess(result, 'archive-name version inference installation')
       if (!result.output.toLowerCase().includes('resolved dsh version')) {
         throw new Error(`Version inference was not reported\n${result.output}`)
       }
       const inferredShim = join(inferredPrefix, 'bin', 'dsh.cmd')
-      result = invoke(inferredShim, ['--version'], { env })
+      result = await invoke(inferredShim, ['--version'], { env })
       assertSuccess(result, 'inferred-version shim execution')
       if (result.output.trim() !== options.version) throw new Error(`Inferred-version shim returned ${result.output.trim()}`)
 
       const renamedArchive = join(temp, 'package.zip')
       copyFileSync(archive, renamedArchive)
       const renamedPrefix = join(temp, 'renamed-prefix')
-      result = runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag], env)
       assertFailure(result, 'archive name without version information', 'version')
       if (existsSync(renamedPrefix)) throw new Error('Unnamed-archive failure created the installation prefix')
 
       const foreignArchive = join(temp, `dsh-v${options.version}-linux-x64.tar.gz`)
       copyFileSync(archive, foreignArchive)
       const foreignPrefix = join(temp, 'foreign-prefix')
-      result = runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
       assertFailure(result, 'foreign-platform archive', 'win-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 
@@ -223,27 +234,27 @@ async function main() {
     } else {
       const inferredPrefix = join(temp, 'inferred-version-prefix')
       copyFileSync(`${archive}.sha256`, `${isolatedArchive}.sha256`)
-      result = runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
       assertSuccess(result, 'archive-name version inference installation')
       if (!result.output.toLowerCase().includes('resolved dsh version')) {
         throw new Error(`Version inference was not reported\n${result.output}`)
       }
       const inferredShim = join(inferredPrefix, 'bin', 'dsh')
-      result = invoke(inferredShim, ['--version'], { env })
+      result = await invoke(inferredShim, ['--version'], { env })
       assertSuccess(result, 'inferred-version shim execution')
       if (result.output.trim() !== options.version) throw new Error(`Inferred-version shim returned ${result.output.trim()}`)
 
       const renamedArchive = join(temp, 'package.tar.gz')
       copyFileSync(archive, renamedArchive)
       const renamedPrefix = join(temp, 'renamed-prefix')
-      result = runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag], env)
       assertFailure(result, 'archive name without version information', 'version')
       if (existsSync(renamedPrefix)) throw new Error('Unnamed-archive failure created the installation prefix')
 
       const foreignArchive = join(temp, `dsh-v${options.version}-win-x64.zip`)
       copyFileSync(archive, foreignArchive)
       const foreignPrefix = join(temp, 'foreign-prefix')
-      result = runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
       assertFailure(result, 'foreign-platform archive', 'linux-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 
