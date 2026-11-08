@@ -26,6 +26,17 @@ main:
         GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
         CNB_REPO: "aixx.work/dsh-cli-standalone"
       stages:
+        - name: sync-code-from-github
+          image: tencentcom/git-sync
+          settings:
+            # 拉取模式：从 GitHub 拉取全部分支与标签（含完整提交历史）推送到本 CNB 仓库
+            target_url: https://github.com/RainEchoA/dsh-cli-standalone.git
+            auth_type: https
+            sync_mode: pull
+            push_tags: true
+            force: true
+            git_user: cnb-ci
+            git_email: cnb-ci@aixx.me
         - name: sync-release
           image: node:22
           script: |
@@ -57,6 +68,17 @@ main:
         GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
         CNB_REPO: "aixx.work/dsh-cli-standalone"
       stages:
+        - name: sync-code-from-github
+          image: tencentcom/git-sync
+          settings:
+            # 拉取模式：从 GitHub 拉取全部分支与标签（含完整提交历史）推送到本 CNB 仓库
+            target_url: https://github.com/RainEchoA/dsh-cli-standalone.git
+            auth_type: https
+            sync_mode: pull
+            push_tags: true
+            force: true
+            git_user: cnb-ci
+            git_email: cnb-ci@aixx.me
         - name: sync-release
           image: node:22
           script: |
@@ -88,6 +110,17 @@ main:
         GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
         CNB_REPO: "aixx.work/dsh-cli-standalone"
       stages:
+        - name: sync-code-from-github
+          image: tencentcom/git-sync
+          settings:
+            # 拉取模式：从 GitHub 拉取全部分支与标签（含完整提交历史）推送到本 CNB 仓库
+            target_url: https://github.com/RainEchoA/dsh-cli-standalone.git
+            auth_type: https
+            sync_mode: pull
+            push_tags: true
+            force: true
+            git_user: cnb-ci
+            git_email: cnb-ci@aixx.me
         - name: sync-release
           image: node:22
           script: |
