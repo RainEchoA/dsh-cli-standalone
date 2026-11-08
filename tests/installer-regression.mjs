@@ -74,7 +74,7 @@ async function main() {
   // and download requests must arrive rewritten as "<proxy>/https://api.github.com/..."
   // and "<proxy>/https://github.com/..."; the download then 404s on purpose, so the run
   // must fail while still having logged which version it resolved.
-  const exerciseResolution = async (proxyFlag) => {
+  const exerciseResolution = async (proxyFlag, env) => {
     const releaseTags = ['v2.0.0-alpha.1', 'v2.0.0-dev.3', 'v1.0.1-rc.1', 'v1.0.0', 'v0.3.0-beta.1', 'v0.2.9', 'not-a-semver']
     const requestedPaths = []
     const apiServer = createServer((req, res) => {
@@ -219,7 +219,7 @@ async function main() {
       assertFailure(result, 'foreign-platform archive', 'win-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 
-      await exerciseResolution('-GitHubProxy')
+      await exerciseResolution('-GitHubProxy', env)
     } else {
       const inferredPrefix = join(temp, 'inferred-version-prefix')
       copyFileSync(`${archive}.sha256`, `${isolatedArchive}.sha256`)
@@ -247,7 +247,7 @@ async function main() {
       assertFailure(result, 'foreign-platform archive', 'linux-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 
-      await exerciseResolution('--github-proxy')
+      await exerciseResolution('--github-proxy', env)
     }
 
     console.log('INSTALLER_REGRESSION_PASS')
