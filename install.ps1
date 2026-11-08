@@ -222,10 +222,11 @@ try {
                 $Archive = (Resolve-Path -LiteralPath $Archive).Path
                 if (-not $Checksum) {
                     $checksumPath = "$Archive.sha256"
-                    if (-not (Test-Path -LiteralPath $checksumPath)) {
-                        throw 'Local installation requires -Checksum or a sibling .zip.sha256 file'
+                    if (Test-Path -LiteralPath $checksumPath) {
+                        $Checksum = Get-ExpectedChecksum $checksumPath (Split-Path -Leaf $Archive)
+                    } else {
+                        Write-Host "No .sha256 checksum found next to $Archive; skipping checksum verification"
                     }
-                    $Checksum = Get-ExpectedChecksum $checksumPath (Split-Path -Leaf $Archive)
                 }
             } else {
                 $releaseUrl = "$BaseUrl/v$Version"
@@ -243,12 +244,14 @@ try {
                 $Checksum = Get-ExpectedChecksum $checksumPath $filename
             }
 
-            if ($Checksum -notmatch '^[0-9a-fA-F]{64}$') { throw 'Missing or malformed SHA-256 checksum' }
-            $actual = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash
-            if ($actual -ne $Checksum) {
-                throw "Archive checksum mismatch: expected $Checksum, got $actual; installation has not changed"
+            if ($Checksum) {
+                if ($Checksum -notmatch '^[0-9a-fA-F]{64}$') { throw 'Missing or malformed SHA-256 checksum' }
+                $actual = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash
+                if ($actual -ne $Checksum) {
+                    throw "Archive checksum mismatch: expected $Checksum, got $actual; installation has not changed"
+                }
+                Write-Host "Verified archive SHA-256: $actual"
             }
-            Write-Host "Verified archive SHA-256: $actual"
 
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $zip = [System.IO.Compression.ZipFile]::OpenRead($Archive)

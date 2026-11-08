@@ -11,7 +11,8 @@ Options:
                             repo is resolved automatically (dev/alpha prereleases excluded)
   --archive <file>          Install a local dsh-v<version>-linux-x64.tar.gz; when --version
                             is omitted the version is inferred from the archive file name
-  --checksum <sha256>       Expected archive checksum; otherwise read <archive>.sha256
+  --checksum <sha256>       Expected archive checksum; otherwise read <archive>.sha256;
+                            installation proceeds unverified when neither exists
   --prefix <directory>      Installation prefix (default: $HOME/.local)
   --base-url <url>          Release download URL without a trailing slash
   --releases-api-url <url>  Release listing API used for version resolution
@@ -236,9 +237,11 @@ if [ -n "$archive" ]; then
   [ -f "$archive" ] || fail "local archive not found: $archive"
   archive_dir=$(CDPATH= cd -- "$(dirname -- "$archive")" && pwd)
   archive=$archive_dir/$(basename -- "$archive")
-  if [ -z "$checksum" ]; then
-    [ -f "$archive.sha256" ] || fail "local installation requires --checksum or a sibling $(basename -- "$archive").sha256"
+  if [ -z "$checksum" ] && [ -f "$archive.sha256" ]; then
     checksum=$(awk -v file="$(basename -- "$archive")" '{ value=$2; sub(/^\*/, "", value); if (value == file) { print $1; exit } }' "$archive.sha256")
+  fi
+  if [ -z "$checksum" ]; then
+    echo "no .sha256 checksum next to $archive; skipping checksum verification"
   fi
 else
   url=$base_url/v$version
@@ -260,17 +263,19 @@ else
   checksum=$(awk -v file="$name" '{ value=$2; sub(/^\*/, "", value); if (value == file) { print $1; exit } }' "$archive.sha256")
 fi
 
-case "$checksum" in
-  *[!0-9a-f]*|'') fail "missing or malformed SHA-256 checksum" ;;
-esac
-[ "${#checksum}" -eq 64 ] || fail "SHA-256 checksum must contain exactly 64 hexadecimal characters"
-if [ "$hash_tool" = sha256sum ]; then
-  actual=$(sha256sum "$archive" | awk '{print $1}')
-else
-  actual=$(shasum -a 256 "$archive" | awk '{print $1}')
+if [ -n "$checksum" ]; then
+  case "$checksum" in
+    *[!0-9a-f]*|'') fail "missing or malformed SHA-256 checksum" ;;
+  esac
+  [ "${#checksum}" -eq 64 ] || fail "SHA-256 checksum must contain exactly 64 hexadecimal characters"
+  if [ "$hash_tool" = sha256sum ]; then
+    actual=$(sha256sum "$archive" | awk '{print $1}')
+  else
+    actual=$(shasum -a 256 "$archive" | awk '{print $1}')
+  fi
+  [ "$actual" = "$checksum" ] || fail "archive checksum mismatch: expected $checksum, got $actual; installation has not changed"
+  echo "Verified archive SHA-256: $actual"
 fi
-[ "$actual" = "$checksum" ] || fail "archive checksum mismatch: expected $checksum, got $actual; installation has not changed"
-echo "Verified archive SHA-256: $actual"
 
 tar -tzf "$archive" > "$work/archive-list" || fail "invalid or truncated tar.gz archive"
 while IFS= read -r entry; do

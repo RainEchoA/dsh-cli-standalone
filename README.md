@@ -68,7 +68,7 @@ irm https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.
 可用环境变量（全部可选）：
 
 - `DSH_VERSION`：显式 dsh 版本（不带 `v` 前缀）；缺省时自动解析最新 release。
-- `DSH_ARCHIVE`／`DSH_CHECKSUM`：离线安装本地归档／显式 SHA-256；未设 `DSH_VERSION` 时版本从归档文件名解析。
+- `DSH_ARCHIVE`／`DSH_CHECKSUM`：离线安装本地归档／显式 SHA-256（校验可选：有归档旁 `.sha256` 或显式值则校验，否则跳过并提示）；未设 `DSH_VERSION` 时版本从归档文件名解析。
 - `DSH_PREFIX`：安装位置，默认 `%LOCALAPPDATA%\Programs\dsh`。
 - `DSH_NO_MODIFY_PATH`：非空时禁止修改用户 PATH。
 - `DSH_BASE_URL`／`DSH_RELEASES_API_URL`：release 下载／版本解析 API 的基础地址（镜像、气隙环境）。
@@ -120,7 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/i
 
 `--version`／`--base-url`／`--releases-api-url`／`--github-proxy`／`--prefix` 缺省时依次读取环境变量 `DSH_VERSION`／`DSH_BASE_URL`／`DSH_RELEASES_API_URL`／`DSH_GH_PROXY`／`DSH_PREFIX`（`curl ... | sh` 场景用环境变量传参）。代理行为与 Windows 一致：外层 `curl` 的 URL 需自行加代理前缀；解析失败时显式 `DSH_VERSION` 可绕开 api.github.com。
 
-完全离线的本地归档安装；校验和文件必须位于归档旁：
+完全离线的本地归档安装（归档旁的 `.sha256` 或 `--checksum` 存在时校验，二者皆无则跳过验证并提示）：
 
 ```sh
 ./install.sh \
@@ -189,7 +189,7 @@ install.ps1
 - 目标平台与构建机不一致：硬失败。
 - 请求版本与 npm 实际安装版本不一致：硬失败。
 - Node.js 或 dsh 归档校验和错误：硬失败，不创建安装前缀。
-- 本地归档没有校验和：硬失败，不跳过验证。
+- 离线归档旁存在 `.sha256` 或显式给出校验和时：必须校验，错误硬失败；两者都缺省时跳过验证，并在输出中明示（不静默跳过）。
 - 归档包含绝对路径或 `..` 路径项：硬失败。
 - 安装后版本输出不符：硬失败。
 - 下载失败：返回非零，不自动切换镜像或版本。

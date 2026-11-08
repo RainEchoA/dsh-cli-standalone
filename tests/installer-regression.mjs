@@ -114,10 +114,13 @@ async function main() {
     const isolatedArchive = join(isolated, basename(archive))
     mkdirSync(isolated, { recursive: true })
     copyFileSync(archive, isolatedArchive)
-    const missingChecksumPrefix = join(temp, 'missing-checksum-prefix')
-    let result = runInstaller([versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, missingChecksumPrefix, noPathFlag])
-    assertFailure(result, 'local archive without a checksum', 'checksum')
-    if (existsSync(missingChecksumPrefix)) throw new Error('Missing-checksum failure created the installation prefix')
+    const noChecksumPrefix = join(temp, 'no-checksum-prefix')
+    let result = runInstaller([versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, noChecksumPrefix, noPathFlag])
+    assertSuccess(result, 'local archive without a checksum installs with verification skipped')
+    if (!result.output.toLowerCase().includes('skipping')) {
+      throw new Error(`Checksum skip was not reported\n${result.output}`)
+    }
+    if (!existsSync(join(noChecksumPrefix, 'bin'))) throw new Error('Checksum-less install did not create the installation prefix')
 
     const corruptArchive = join(temp, basename(archive))
     copyFileSync(archive, corruptArchive)
@@ -146,7 +149,13 @@ async function main() {
       installArgs.push(noPathFlag)
       userPathBefore = invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"]).stdout?.trim()
     }
-    const env = { ...process.env, HOME: home, DSH_HOME: join(home, '.dsh') }
+    // The CI workflow exports DSH_VERSION at job level; scrub DSH_* so the installers
+    // under test actually exercise version inference and release resolution.
+    const scrubbed = { ...process.env }
+    for (const key of Object.keys(scrubbed)) {
+      if (key.startsWith('DSH_')) delete scrubbed[key]
+    }
+    const env = { ...scrubbed, HOME: home, DSH_HOME: join(home, '.dsh') }
     result = runInstaller(installArgs, env)
     assertSuccess(result, 'valid local archive installation')
 
