@@ -69,6 +69,8 @@ function normalizeRelease(release, repo) {
 function renderHtml(data) {
   const latest = data.releases[0]
   const repositoryUrl = `https://github.com/${data.repository}`
+  const windowsInstallCommand = `irm https://raw.githubusercontent.com/${data.repository}/main/install.ps1 | iex`
+  const linuxInstallCommand = `curl -fsSL https://raw.githubusercontent.com/${data.repository}/main/install.sh | sh`
   const releaseItems = data.releases.map((release, index) => `        <li>
           <a class="release-card" href="${escapeHtml(release.url)}" aria-label="查看 ${escapeHtml(release.version)} Release">
             <span class="release-number">${String(index + 1).padStart(2, '0')}</span>
@@ -118,6 +120,24 @@ function renderHtml(data) {
     .api-card { background: linear-gradient(135deg, #19172de8, #111522e8); }
     .api-card code { display: inline-block; margin: 18px 0; color: #ddd6fe; font-size: 18px; overflow-wrap: anywhere; }
     .api-card .card-link { color: #c4b5fd; }
+    .install { padding: 0 0 66px; }
+    .install-card { overflow: hidden; background: linear-gradient(120deg, #111b29ed, #111523ed); border: 1px solid #30415a; border-radius: 20px; box-shadow: 0 20px 60px #00000024; }
+    .install-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+    .platform-tabs { display: flex; gap: 5px; padding: 4px; background: #080d17a8; border: 1px solid #232d41; border-radius: 11px; }
+    button { font: inherit; }
+    button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+    .platform-tab { padding: 7px 15px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; cursor: pointer; font-size: 12px; font-weight: 650; transition: color .2s, background .2s; }
+    .platform-tab:hover { color: var(--text); }
+    .platform-tab.active { color: #071410; background: var(--cyan); box-shadow: 0 3px 14px #63e6d424; }
+    .platform-note { color: var(--muted); font-size: 11px; }
+    .command-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; margin: 20px; padding: 18px 19px; background: #070b13c9; border: 1px solid #202b3f; border-radius: 12px; }
+    .command-prompt { color: var(--cyan); font-family: "SFMono-Regular", Consolas, monospace; font-size: 14px; font-weight: 700; }
+    .command-text { overflow-x: auto; color: #e8eefc; font-size: 13px; line-height: 1.7; white-space: nowrap; scrollbar-width: thin; }
+    .copy-button { min-width: 86px; padding: 9px 13px; color: #dbe6f8; background: #1b2638; border: 1px solid #36445d; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 650; transition: color .2s, background .2s, border-color .2s; }
+    .copy-button:hover { background: #253249; border-color: #52617e; }
+    .copy-button.copied { color: var(--cyan); border-color: #63e6d44d; }
+    .install-note { margin: 0; padding: 0 22px 20px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+    .install-note a { color: #c4b5fd; text-decoration: underline; text-underline-offset: 3px; }
     .releases { padding: 8px 0 72px; }
     .section-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 22px; }
     .section-kicker { margin: 0 0 5px; color: var(--muted); font-size: 10px; letter-spacing: .18em; }
@@ -148,6 +168,12 @@ function renderHtml(data) {
       .hero { padding: 55px 0 44px; }
       .hero-grid { grid-template-columns: 1fr; margin-top: 32px; }
       .feature-card { min-height: 155px; }
+      .install { padding-bottom: 48px; }
+      .install-toolbar { align-items: flex-start; flex-direction: column; gap: 10px; }
+      .command-row { grid-template-columns: auto minmax(0, 1fr); gap: 11px; margin: 13px; padding: 15px; }
+      .command-text { font-size: 12px; }
+      .copy-button { grid-column: 2; justify-self: start; }
+      .install-note { padding: 0 16px 17px; }
       .release-card { grid-template-columns: 1fr auto; gap: 12px; padding: 19px; }
       .release-number { display: none; }
       .release-action { font-size: 0; }
@@ -181,6 +207,27 @@ function renderHtml(data) {
           </a>
         </div>
       </section>
+      <section class="install" aria-labelledby="install-title">
+        <div class="section-heading">
+          <div><p class="section-kicker">QUICK INSTALL</p><h2 id="install-title">一行命令，快速安装</h2></div>
+          <span class="count">X64 · NO NODE.JS REQUIRED</span>
+        </div>
+        <div class="install-card">
+          <div class="install-toolbar">
+            <div class="platform-tabs" role="tablist" aria-label="选择目标操作系统">
+              <button class="platform-tab active" id="tab-linux" type="button" role="tab" aria-selected="true" aria-controls="install-panel" data-install-platform="linux" data-command="${escapeHtml(linuxInstallCommand)}" data-shell="Shell" data-prompt="$">Linux</button>
+              <button class="platform-tab" id="tab-windows" type="button" role="tab" aria-selected="false" aria-controls="install-panel" data-install-platform="windows" data-command="${escapeHtml(windowsInstallCommand)}" data-shell="PowerShell" data-prompt="PS >">Windows</button>
+            </div>
+            <span class="platform-note" id="platform-note">Linux · Shell</span>
+          </div>
+          <div class="command-row" id="install-panel" role="tabpanel" aria-labelledby="tab-linux">
+            <span class="command-prompt" id="command-prompt" aria-hidden="true">$</span>
+            <code class="command-text" id="install-command">${escapeHtml(linuxInstallCommand)}</code>
+            <button class="copy-button" id="copy-install" type="button">复制命令</button>
+          </div>
+          <p class="install-note">无需预装 Node.js，自动安装最新适用版本。当前提供 Linux x86_64 与 Windows x64；其他系统请手动选择目标平台。查看 <a href="${escapeHtml(repositoryUrl)}#安装">完整安装文档</a>。</p>
+        </div>
+      </section>
       <section class="releases" aria-labelledby="releases-title">
         <div class="section-heading">
           <div><p class="section-kicker">RELEASE ARCHIVE</p><h2 id="releases-title">全部版本</h2></div>
@@ -194,6 +241,83 @@ function renderHtml(data) {
       <span>更新于 <time datetime="${escapeHtml(data.generatedAt)}">${escapeHtml(data.generatedAt)}</time></span>
     </footer>
   </div>
+  <script>
+    (() => {
+      const tabs = Array.from(document.querySelectorAll('[data-install-platform]'))
+      const command = document.getElementById('install-command')
+      const prompt = document.getElementById('command-prompt')
+      const note = document.getElementById('platform-note')
+      const panel = document.getElementById('install-panel')
+      const copyButton = document.getElementById('copy-install')
+      let copyTimer
+
+      function selectPlatform(platform, detected = false) {
+        const selected = tabs.find((tab) => tab.dataset.installPlatform === platform)
+        if (!selected) return
+        for (const tab of tabs) {
+          const active = tab === selected
+          tab.classList.toggle('active', active)
+          tab.setAttribute('aria-selected', String(active))
+        }
+        command.textContent = selected.dataset.command
+        prompt.textContent = selected.dataset.prompt
+        panel.setAttribute('aria-labelledby', selected.id)
+        note.textContent = (detected ? '已识别当前系统 · ' : '') + selected.textContent + ' · ' + selected.dataset.shell
+        copyButton.textContent = '复制命令'
+        copyButton.classList.remove('copied')
+      }
+
+      for (const tab of tabs) {
+        tab.addEventListener('click', () => selectPlatform(tab.dataset.installPlatform))
+        tab.addEventListener('keydown', (event) => {
+          if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+          event.preventDefault()
+          const other = tabs.find((item) => item !== tab)
+          selectPlatform(other.dataset.installPlatform)
+          other.focus()
+        })
+      }
+
+      const system = [navigator.userAgentData?.platform, navigator.platform, navigator.userAgent].filter(Boolean).join(' ')
+      if (/windows/i.test(system)) selectPlatform('windows', true)
+      else if (/linux/i.test(system) && !/android/i.test(system)) selectPlatform('linux', true)
+      else note.textContent = '请选择目标系统 · 当前默认 Linux'
+
+      async function writeClipboard(text) {
+        if (window.isSecureContext && navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(text)
+            return
+          } catch {}
+        }
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        const copied = document.execCommand('copy')
+        textarea.remove()
+        if (!copied) throw new Error('Copy command failed')
+      }
+
+      copyButton.addEventListener('click', async () => {
+        window.clearTimeout(copyTimer)
+        try {
+          await writeClipboard(command.textContent)
+          copyButton.textContent = '已复制'
+          copyButton.classList.add('copied')
+        } catch {
+          copyButton.textContent = '复制失败'
+          copyButton.classList.remove('copied')
+        }
+        copyTimer = window.setTimeout(() => {
+          copyButton.textContent = '复制命令'
+          copyButton.classList.remove('copied')
+        }, 1800)
+      })
+    })()
+  </script>
 </body>
 </html>
 `
