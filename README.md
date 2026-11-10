@@ -160,6 +160,21 @@ node tests/installer-regression.mjs \
 
 CentOS 8 容器只证明 **glibc 2.28 用户空间兼容性**。容器使用宿主机内核，因此不能据此宣称已验证 CentOS 8 的 4.18 内核或 Landlock 降级行为。
 
+## Release 版本页面
+
+每次 Release 成功后，工作流会通过 GitHub Pages 发布静态版本索引，页面访问时不依赖 GitHub API：
+
+- 人工查看：<https://rainechoa.github.io/dsh-cli-standalone/>
+- 程序读取：<https://rainechoa.github.io/dsh-cli-standalone/releases.json>
+
+JSON 包含 `versions` 版本号数组及 `releases` 详细信息，保留所有非草稿 Release（包括 rc/beta 预发布），可供 CNB 等没有公开 Release 查询接口的平台使用：
+
+```sh
+curl -fsSL https://rainechoa.github.io/dsh-cli-standalone/releases.json
+```
+
+首次部署前需在仓库 Settings → Pages 中将 Source 设为 **GitHub Actions**。本地可用 `npm run build:release-page` 重新生成到 `dist-pages/`，用 `npm run test:release-page` 验证分页、草稿过滤和页面输出。
+
 ## 发布
 
 发布走 GitHub Actions，不在本机手工上传产物。两种触发方式：

@@ -33,6 +33,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Test release page generator
+        if: matrix.platform == 'linux'
+        run: node tests/release-page-regression.mjs
       - name: Build standalone archive
         run: node scripts/build-standalone.mjs --version "${{ env.DSH_VERSION }}" --node-version "${{ env.NODE_VERSION }}" --platform "${{ matrix.platform }}" --output-dir dist
       - name: Verify extracted runtime, fake-system-Node guard, and Web GUI

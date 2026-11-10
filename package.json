@@ -7,7 +7,9 @@
   "scripts": {
     "build:linux": "node scripts/build-standalone.mjs --version 0.2.2-rc.1 --platform linux",
     "build:win": "node scripts/build-standalone.mjs --version 0.2.2-rc.1 --platform win",
-    "test:install": "node tests/installer-regression.mjs"
+    "build:release-page": "node scripts/build-release-page.mjs",
+    "test:install": "node tests/installer-regression.mjs",
+    "test:release-page": "node tests/release-page-regression.mjs"
   },
   "engines": {
     "node": ">=24.9.0"
