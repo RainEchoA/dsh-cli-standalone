@@ -83,7 +83,7 @@ jobs:
             - 发布运行：$run_url
 
             发布流水线会完成双平台构建与全部验证；若失败，次日扫描会自动重试。
-            EOF
+          EOF
             )
           else
             body=$(cat <<EOF
@@ -99,7 +99,7 @@ jobs:
             \`\`\`
 
             或手动运行 \`release\` 工作流并输入版本 \`$latest\`。
-            EOF
+          EOF
             )
           fi
           existing=$(gh issue list --label version-scan --state open --json number --jq '.[0].number')
