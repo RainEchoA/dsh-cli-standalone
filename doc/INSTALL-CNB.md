@@ -97,19 +97,25 @@ Windows 产物为 `dsh-v0.2.2-rc.1-win-x64.zip`（附同名 `.sha256`）。
 
 > 按钮仅在「代码-分支详情页」显示；需要有仓库写权限才能触发。
 
-每条流水线包含三个 Stage：
+每条流水线包含两个 Stage：
 
 | Stage | 镜像 | 作用 |
 | --- | --- | --- |
-| `sync-code-from-github` | `tencentcom/git-sync` | **全量提交历史同步**：拉取模式下把 GitHub 的所有分支与 tag（含完整 commit 历史）推到本仓库；`push_tags: true` 对齐 tag，`force: true` 允许覆盖 |
+| `sync-code-from-github` | `node:22` | 跑 `scripts/sync-code-from-github.sh`：镜像 GitHub 的分支、tag、完整提交历史；在 main 之上追加一次主页 `README.md` 生成提交 |
 | `sync-release` | `node:22` | 同步 GitHub Release 的说明与附件（幂等） |
-| `update-home-readme` | `node:22` | 由 `doc/INSTALL-CNB.md` 重新生成主页 `README.md` 并提交 |
+
+> **为什么不用 `tencentcom/git-sync` 的 pull 模式**：它内部是 `git pull --rebase`，会把 CNB 侧那条
+> 「docs: 更新 CNB 主页 README」提交重放到 GitHub 历史之上。而 `README.md` 在两边本就是有意不同的
+> （GitHub 放项目说明，CNB 放本手册生成的内容），只要 GitHub 侧动过 README，rebase 必然 `CONFLICT`，
+> 后续 Stage 全部 skipped。现在改为「以 GitHub main 为基线重建 main」，CNB main 恒等于
+> 「GitHub main + 1 个 README 生成提交」，无分叉、无冲突。
 
 同步脚本的行为：
 
 1. **读 GitHub 走匿名访问**：源仓库是公开的，不使用任何 Token / 密钥，只依赖 GitHub 公开 API。
 2. **写 CNB 用流水线内置 `CNB_TOKEN`**：构建结束自动销毁，权限限定在当前仓库。
 3. **幂等**：附件名与大小一致即跳过，不重复下载、不重复上传；体积变化或新增附件才补传。
+   代码镜像同样幂等——CNB 侧已与 GitHub 一致时不会产生新的 README 提交。
 4. **不触发构建**：仓库设置里「推送自动触发」为关闭状态，只有定时任务会跑起来。
 5. **提交历史**：CNB 仓库保留 GitHub 的全部 commit（当前 19 个 GitHub 提交 + CNB 侧文档提交），可用
    `GET https://api.cnb.cool/aixx.work/dsh-cli-standalone/-/git/commits?page_size=100` 查看
@@ -133,7 +139,7 @@ bash scripts/sync-cnb.sh --repo aixx.work/dsh-cli-standalone
 
 | 工具 | 用途 |
 | --- | --- |
-| [tencentcom/git-sync](https://cnb.cool/cnb/plugins/tencentcom/git-sync) | **官方代码同步插件**：pull 模式从 GitHub 拉取全部分支/tag/提交历史推到 CNB（本仓库用它做定时全量同步） |
+| [tencentcom/git-sync](https://cnb.cool/cnb/plugins/tencentcom/git-sync) | 官方代码同步插件，支持 push / rebase / pull 三种模式；**本仓库未使用**（pull 模式在「两边 README 有意不同」的场景下会反复冲突） |
 | [.cnb/web_trigger.yml](https://docs.cnb.cool/zh/build/web-trigger.html) | 仓库页面自定义按钮（手动触发流水线） |
 | [mpgrm](https://cnb.cool/zhiqiangwang/mpgrm)（gsync 继任者） | 跨平台同步 Release 与附件，镜像 `docker.cnb.cool/zhiqiangwang/mpgrm:latest` |
 | [cnbcool/attachments](https://cnb.cool/cnb/plugins/cnbcool/attachments) | 官方附件插件，在流水线里给 Release 上传 / 下载附件 |

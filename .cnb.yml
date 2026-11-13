@@ -1,13 +1,18 @@
 # CNB 云原生构建配置
 #
 # 目标：每天凌晨 3 点（Asia/Shanghai）自动完成三件事
-#       1) 把 GitHub 的全部分支 / tag / 完整提交历史镜像到本 CNB 仓库
+#       1) 把 GitHub 的分支 / tag / 完整提交历史镜像到本 CNB 仓库
 #       2) 把 GitHub Release 的说明与附件同步到本仓库的 CNB Release
-#       3) 用 doc/INSTALL-CNB.md 重新生成 CNB 主页 README.md
+#       3) 在 main 之上生成 CNB 主页 README.md（内容来自 doc/INSTALL-CNB.md）
 #       全程不在 CNB 上执行任何「构建」（仓库「推送自动触发」已关闭）。
 #
 # - 读取 GitHub 全部使用匿名访问（公开仓库，无需任何 Token / 密钥）。
 # - 写入 CNB 使用流水线内置的 CNB_TOKEN（构建结束自动销毁，仅限当前仓库）。
+# - 代码镜像用 scripts/sync-code-from-github.sh 而不是 tencentcom/git-sync 的 pull 模式：
+#   pull 模式内部是 `git pull --rebase`，会把 CNB 侧那条自动生成的
+#   「docs: 更新 CNB 主页 README」提交重放到 GitHub 历史之上。README.md 两边内容
+#   本就是有意不同的，只要 GitHub 侧动过 README 就必定 CONFLICT，整条流水线失败。
+#   改用脚本后，CNB main 恒定重建为「GitHub main + 1 个 README 生成提交」，无分叉、无冲突。
 # - 触发方式：
 #     crontab 0 3 * * *   每天 03:00 定时（避开 GitHub 21:00 扫描/构建高峰）
 #     web_trigger        页面通用按钮
@@ -16,7 +21,7 @@
 #
 # 页面按钮配置见 .cnb/web_trigger.yml。
 # 社区可参考的实现：
-#   - tencentcom/git-sync（代码全量镜像）：https://cnb.cool/cnb/plugins/tencentcom/git-sync
+#   - tencentcom/git-sync（push/rebase 模式的跨平台互推）：https://cnb.cool/cnb/plugins/tencentcom/git-sync
 #   - mpgrm（gsync 继任者，Release 同步）：https://cnb.cool/zhiqiangwang/mpgrm
 #   - CNB 附件插件：https://cnb.cool/cnb/plugins/cnbcool/attachments
 
@@ -29,23 +34,15 @@ main:
       env:
         GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
         CNB_REPO: "aixx.work/dsh-cli-standalone"
-        # CNB 主页 README 的触发白名单（只有这些文件变化才重新生成）
-        README_TRIGGER_FILES: "doc/INSTALL-CNB.md scripts/render-cnb-readme.mjs README.md"
+        SYNC_MODE: "full"
       stages:
-        # 1) 代码全量镜像：所有分支 + tag + 完整提交历史
+        # 1) 代码镜像 + 主页 README：分支 / tag / 完整提交历史，main 上追加 README 生成提交
         - name: sync-code-from-github
-          image: tencentcom/git-sync
-          settings:
-            # 拉取模式：从 GitHub 拉取全部分支与标签（含完整提交历史）推送到本 CNB 仓库
-            target_url: https://github.com/RainEchoA/dsh-cli-standalone.git
-            auth_type: https
-            sync_mode: pull
-            push_tags: true
-            force: true
-            # 允许覆盖本地同名标签，保证 CNB 上的 tag 与 GitHub 完全一致
-            fetch_options: "--force --prune"
-            git_user: cnb-ci
-            git_email: cnb-ci@aixx.me
+          image: node:22
+          script: |
+            set -eu
+            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
+            sh scripts/sync-code-from-github.sh
 
         # 2) Release 产物同步（幂等：附件已存在且大小一致会跳过）
         - name: sync-release
@@ -56,88 +53,32 @@ main:
             echo "仓库: ${CNB_REPO}  源仓库: ${GITHUB_SOURCE_REPO}"
             node scripts/sync-release.mjs
 
-        # 3) CNB 主页 README（由 doc/INSTALL-CNB.md 生成）
-        - name: update-home-readme
-          image: node:22
-          script: |
-            set -eu
-            cd "${CNB_BUILD_WORKSPACE:-/workspace}"
-            # 白名单：只有这些文件变化时才重新生成并推送 CNB 主页 README
-            WHITELIST="${README_TRIGGER_FILES:-doc/INSTALL-CNB.md scripts/render-cnb-readme.mjs README.md}"
-            BASE=$(git log -1 --grep="更新 CNB 主页 README" --format=%H || true)
-            [ -n "$BASE" ] || BASE=$(git rev-parse HEAD)
-            CHANGED=$(git diff --name-only "$BASE" HEAD -- $WHITELIST || true)
-            if [ -z "$CHANGED" ]; then
-              echo "白名单内文件无变化，跳过 CNB 主页 README 更新：$WHITELIST"
-              exit 0
-            fi
-            echo "白名单内文件有变化："
-            echo "$CHANGED"
-            node scripts/render-cnb-readme.mjs --doc doc/INSTALL-CNB.md --out README.md
-            git add README.md
-            if git diff --cached --quiet; then
-              echo "CNB 主页 README 无变化，跳过提交"
-            else
-              # core.hooksPath=/dev/null：绕过仓库自带的 git-lfs hook（node:22 镜像未装 git-lfs）
-              git -c core.hooksPath=/dev/null \
-                  -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
-                  commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
-              git -c core.hooksPath=/dev/null push --quiet --force \
-                "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
-              echo "已更新 CNB 主页 README"
-            fi
-
   # ---------------------------------------------------------------- 页面/API 触发
   web_trigger: *sync_pipelines
   web_trigger_sync: *sync_pipelines
   api_trigger: *sync_pipelines
 
-  # 仅刷新主页 README
-  web_trigger_readme: &readme_only_pipeline
+  # 仅刷新主页 README（不镜像分支与 tag）
+  web_trigger_readme:
     - name: update-home-readme-only
       env:
+        GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
         CNB_REPO: "aixx.work/dsh-cli-standalone"
-        # CNB 主页 README 的触发白名单（只有这些文件变化才重新生成）
-        README_TRIGGER_FILES: "doc/INSTALL-CNB.md scripts/render-cnb-readme.mjs README.md"
+        SYNC_MODE: "readme"
       stages:
         - name: update-home-readme
           image: node:22
           script: |
             set -eu
             cd "${CNB_BUILD_WORKSPACE:-/workspace}"
-            # 白名单：只有这些文件变化时才重新生成并推送 CNB 主页 README
-            WHITELIST="${README_TRIGGER_FILES:-doc/INSTALL-CNB.md scripts/render-cnb-readme.mjs README.md}"
-            BASE=$(git log -1 --grep="更新 CNB 主页 README" --format=%H || true)
-            [ -n "$BASE" ] || BASE=$(git rev-parse HEAD)
-            CHANGED=$(git diff --name-only "$BASE" HEAD -- $WHITELIST || true)
-            if [ -z "$CHANGED" ]; then
-              echo "白名单内文件无变化，跳过 CNB 主页 README 更新：$WHITELIST"
-              exit 0
-            fi
-            echo "白名单内文件有变化："
-            echo "$CHANGED"
-            node scripts/render-cnb-readme.mjs --doc doc/INSTALL-CNB.md --out README.md
-            git add README.md
-            if git diff --cached --quiet; then
-              echo "CNB 主页 README 无变化，跳过提交"
-            else
-              # core.hooksPath=/dev/null：绕过仓库自带的 git-lfs hook（node:22 镜像未装 git-lfs）
-              git -c core.hooksPath=/dev/null \
-                  -c user.name="cnb-ci" -c user.email="cnb-ci@aixx.me" \
-                  commit --quiet -m "docs: 更新 CNB 主页 README（由 doc/INSTALL-CNB.md 生成）"
-              git -c core.hooksPath=/dev/null push --quiet --force \
-                "https://oauth2:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git" HEAD:main
-              echo "已更新 CNB 主页 README"
-            fi
+            sh scripts/sync-code-from-github.sh
 
   # 仅同步 Release 产物（不动代码）
-  web_trigger_sync_release: &release_only_pipeline
+  web_trigger_sync_release:
     - name: sync-release-only
       env:
         GITHUB_SOURCE_REPO: "RainEchoA/dsh-cli-standalone"
         CNB_REPO: "aixx.work/dsh-cli-standalone"
-        # CNB 主页 README 的触发白名单（只有这些文件变化才重新生成）
-        README_TRIGGER_FILES: "doc/INSTALL-CNB.md scripts/render-cnb-readme.mjs README.md"
       stages:
         - name: sync-release
           image: node:22

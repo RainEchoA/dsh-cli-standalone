@@ -10,7 +10,8 @@
 # 单写入者模型（避免互相覆盖）：
 #   GitHub  = 代码唯一真源（含 .cnb.yml / 文档 / 脚本）
 #   CNB     = 由仓库里的定时/手动流水线负责镜像：
-#              1) tencentcom/git-sync  pull 模式：全部分支 + tag + 完整提交历史
+#              1) scripts/sync-code-from-github.sh：全部分支 + tag + 完整提交历史，
+#                 并在 main 之上生成主页 README（不用 git-sync pull 模式，原因见该脚本注释）
 #              2) scripts/sync-release.mjs：Release 说明与附件（幂等）
 #              3) scripts/render-cnb-readme.mjs：CNB 主页 README（由 doc/INSTALL-CNB.md 生成）
 #   本脚本只负责：把本地提交推到 GitHub，然后触发 CNB 流水线。
