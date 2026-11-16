@@ -1,220 +1,178 @@
-# dsh-cli-standalone
+<!-- 本文件由 scripts/render-cnb-readme.mjs 基于 INSTALL-CNB.md 自动生成，请勿直接编辑 -->
 
-面向 DeepSeek Harness `dsh` CLI + Web GUI 的独立运行时打包实验。仓库不复制上游 monorepo，而是把指定版本的 `@deepseek-ai/dsh` npm 发布包、生产依赖闭包和固定官方 Node.js 运行时组装成 Linux／Windows 归档。最终用户不需要预装 Node.js、npm、pnpm 或 tsx。
+> **这是 CNB 镜像仓库**（源：<https://github.com/RainEchoA/dsh-cli-standalone>）。
+> 主页内容即《dsh-cli-standalone · CNB 使用与安装手册》，仅面向 CNB 用户；
+> 项目本身的构建与验证口径请看源仓库的 README。
 
-> 当前状态：开发验证阶段。GitHub Actions 通过不代表已经覆盖真实生产推理、完整终端交互、所有插件或所有 Windows 版本；具体边界见“验证口径”。
+[![CNB 定时同步](https://cnb.cool/aixx.work/dsh-cli-standalone/-/badge/git/latest/ci/status/crontab)](https://cnb.cool/aixx.work/dsh-cli-standalone/-/build/logs)
+[![流水线配置](https://cnb.cool/aixx.work/dsh-cli-standalone/-/badge/git/latest/ci/pipeline-as-code)](https://cnb.cool/aixx.work/dsh-cli-standalone/-/blob/main/.cnb.yml)
+[![Latest Release](https://cnb.cool/aixx.work/dsh-cli-standalone/-/badge/release)](https://cnb.cool/aixx.work/dsh-cli-standalone/-/badge/release.link)
+[![Star](https://cnb.cool/aixx.work/dsh-cli-standalone/-/badge/star)](https://cnb.cool/aixx.work/dsh-cli-standalone)
+[![Fork](https://cnb.cool/aixx.work/dsh-cli-standalone/-/badge/fork)](https://cnb.cool/aixx.work/dsh-cli-standalone)
 
-## 平台与固定版本
+---
 
-- dsh：`0.2.2-rc.1`
-- Node.js：`24.22.2`，从 `nodejs.org` 下载并核对官方 SHA-256
-- Linux：x86_64、glibc ≥ 2.28
-- Windows：x64、Windows 10 1809／Server 2019 或更新版本
-- 不在当前范围：musl、arm64、跨操作系统收集原生二进制、SEA 单文件
 
-## 构建
+> 本文件独立于 `README.md`，专门面向 **CNB（cnb.cool）** 镜像仓库的安装、下载与同步机制说明。
+> `README.md` 描述的是项目本身的构建与验证口径，本手册只讲「从 CNB 拿产物、怎么装、怎么同步」。
 
-构建机需要 Node.js ≥ 24.9、npm、curl 和 tar。目标平台必须与构建主机一致；禁止在 Linux 上生成声称包含 Windows 原生依赖的包。
+## 1. CNB 镜像仓库信息
+
+| 项目 | 值 |
+| --- | --- |
+| CNB 仓库 | <https://cnb.cool/aixx.work/dsh-cli-standalone> |
+| GitHub 源仓库 | <https://github.com/RainEchoA/dsh-cli-standalone> |
+| Release 列表 | <https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases> |
+| 单个附件下载 | `https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases/download/<tag>/<文件名>` |
+| 仓库原始文件（raw） | `https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/<路径>` |
+| 同步策略 | 每天 03:00（Asia/Shanghai）定时任务自动同步 GitHub Release 产物 |
+
+CNB 仓库是 GitHub 源仓库的**只读镜像 + 产物分发点**：代码与 tag 随源仓库同步，Release 附件由定时任务搬运，
+**不在 CNB 上执行任何构建**（仓库流水线「推送自动触发」已关闭，仅保留「定时任务自动触发」）。
+
+## 2. 安装（Linux / macOS）
+
+安装脚本通过环境变量把下载源切到 CNB；版本解析默认读取 GitHub Pages 的静态索引，
+再逐个探测 CNB 上产物是否已同步，自动选「CNB 上可用的最新版」（CNB 每天 03:00 同步，
+滞后期间自动回退到已同步版本，无需显式指定版本）：
 
 ```sh
-node scripts/build-standalone.mjs \
+# 1) 把 Release 下载地址切到 CNB
+export DSH_BASE_URL=https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases/download
+
+# 2) 执行 CNB 上的安装脚本
+curl -fsSL https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.sh | bash
+```
+
+需要钉住版本时（等价形式，注意不带 `v` 前缀）：
+
+```sh
+curl -fsSL https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.sh | bash -s -- \
   --version 0.2.2-rc.1 \
-  --node-version 24.22.2 \
-  --platform linux \
-  --output-dir dist
+  --base-url https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases/download
 ```
 
-Windows 使用 `--platform win`。npm 安装脚本采用项目内白名单并启用 `--strict-allow-scripts`；白名单外出现新的生命周期脚本会使构建失败。构建器还检查 Koffi、node-pty、Linux node-addon-system 的实际文件并运行 `scripts/native-probe.mjs`，不使用“安装命令返回成功”代替原生功能验证。
+其它可用环境变量（含义与 GitHub 安装方式一致）：
 
-产物：
+- `DSH_VERSION`：显式指定 dsh 版本；缺省时按上述「索引 + 探测」自动解析。
+- `DSH_ARCHIVE`：本地归档离线安装，如 `dsh-v0.2.2-rc.1-linux-x64.tar.gz`。
+- `DSH_CHECKSUM`：显式指定 SHA-256（缺省时若归档旁有 `.sha256` 则自动校验）。
+- `DSH_PREFIX`：安装前缀，默认 `$HOME/.local`（可执行文件落在 `$HOME/.local/bin/dsh`，版本目录在 `$HOME/.local/share/dsh/versions/<版本>`）。
+- `DSH_RELEASES_JSON_URL`：版本索引 JSON 地址，默认 GitHub Pages 的 `releases.json`；**该地址不会被代理改写**，镜像场景可指向任何可达副本（例如自行托管在 CNB 仓库里的同步副本）。
+- `DSH_GH_PROXY`：GitHub 加速代理（仅在仍走 GitHub 下载时有意义；CNB 等自定义镜像地址不会被代理改写）。
 
-```text
-dsh-v0.2.2-rc.1-linux-x64.tar.gz
-dsh-v0.2.2-rc.1-linux-x64.tar.gz.sha256
-# 或
-dsh-v0.2.2-rc.1-win-x64.zip
-dsh-v0.2.2-rc.1-win-x64.zip.sha256
-```
-
-## 验证实际归档
-
-```sh
-node scripts/verify-standalone.mjs \
-  --archive dist/dsh-v0.2.2-rc.1-linux-x64.tar.gz \
-  --version 0.2.2-rc.1 \
-  --platform linux
-```
-
-验证器重新解包，并执行：
-
-1. `dsh --version`、`dsh --help`、`dsh web --help`；
-2. 在 `PATH` 前置会立即报错的假 `node`／`npm`／`pnpm`，确认启动器没有误用系统工具；
-3. 启动 `dsh web --no-open --host 127.0.0.1 --port 0`，读取实际监听 URL，携带启动 cookie 请求 Web GUI，并检查 HTML 响应；
-4. 枚举归档中的 `.node` 原生模块，保留可复查清单；
-5. 实际加载 Koffi、node-pty 并完成 shell 退出回环；Linux 另测 flock 互斥／释放、glibc 二进制选择及 Landlock 探针，支持时执行隔离写入世界证明。
-
-Windows 使用对应 ZIP 和 `--platform win`。
-
-## 安装
-
-### Windows 一行安装
-
-与 `powershell -File .\install.ps1` 调用的是同一个脚本（取自本仓库 main 分支，不依赖 release 资产副本）。不显式指定版本时，读取[静态版本索引 `releases.json`](https://rainechoa.github.io/dsh-cli-standalone/releases.json)（每次 Release 后由 Pages 工作流刷新），按 semver 优先级从新到旧逐个探测下载源上产物是否实际存在（排除 dev/alpha 前置版本，规则与「每日版本扫描」一致），取「下载源上可用的最新版」——镜像同步滞后时自动回退到已同步的最新版，而不是解析出一个还下载不了的版本；显式指定始终优先：
+## 3. 安装（Windows PowerShell）
 
 ```powershell
-irm https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.ps1 | iex
+$env:DSH_VERSION = "0.2.2-rc.1"
+$env:DSH_BASE_URL = "https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases/download"
+irm https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.ps1 | iex
 ```
 
-可用环境变量（全部可选）：
+安装位置默认 `%LOCALAPPDATA%\Programs\dsh`（可用 `DSH_PREFIX` 覆盖），
+`DSH_NO_MODIFY_PATH` 非空时不修改用户 PATH。
 
-- `DSH_VERSION`：显式 dsh 版本（不带 `v` 前缀）；缺省时自动解析最新 release。
-- `DSH_ARCHIVE`／`DSH_CHECKSUM`：离线安装本地归档／显式 SHA-256（校验可选：有归档旁 `.sha256` 或显式值则校验，否则跳过并提示）；未设 `DSH_VERSION` 时版本从归档文件名解析。
-- `DSH_PREFIX`：安装位置，默认 `%LOCALAPPDATA%\Programs\dsh`。
-- `DSH_NO_MODIFY_PATH`：非空时禁止修改用户 PATH。
-- `DSH_BASE_URL`／`DSH_RELEASES_JSON_URL`：release 下载／版本索引 JSON 的地址（镜像、气隙环境）。版本索引默认值是每次 Release 后刷新的 GitHub Pages 静态 JSON，不依赖 GitHub API。
-- `DSH_GH_PROXY`：GitHub 加速代理（如 `https://api.gitproxy.dev`）；把默认 GitHub 地址（安装脚本、版本 API、release 下载）重写为 `<代理>/<原 URL>`，显式指定的 URL 参数不被重写。
-
-版本解析读取 GitHub Pages 的静态 JSON（`rainechoa.github.io`），下载走 `--base-url`；两者都需可达，气隙环境可把上述地址指向镜像。GitHub 直连受限时可用加速代理（外层 `irm` 的 URL 需自行加代理前缀；版本索引地址不会被代理改写，镜像场景可直接把 `DSH_RELEASES_JSON_URL` 指向可达的 JSON 副本）：
-
-```powershell
-$env:DSH_GH_PROXY = 'https://api.gitproxy.dev'
-irm "$env:DSH_GH_PROXY/https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.ps1" | iex
-```
-
-### Windows 脚本安装
-
-Release 附带的 `install.ps1` 与仓库内副本等价，直接使用 Release 副本：
-
-```powershell
-Invoke-WebRequest -UseBasicParsing -OutFile install.ps1 https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.ps1
-.\install.ps1 -Version 0.2.2-rc.1
-```
-
-版本解析规则与一行安装相同，`-Version` 可省略（自动解析最新 release）；离线归档可省 `-Version`，版本按文件名推断：
-
-```powershell
-.\install.ps1                                        # 在线，自动解析最新 release
-.\install.ps1 -Version 0.2.2-rc.1                    # 在线，显式版本
-.\install.ps1 -GitHubProxy https://gitproxy.dev      # 在线，走 GitHub 加速代理
-.\install.ps1 -Archive .\dsh-v0.2.2-rc.1-win-x64.zip # 离线，版本从归档名解析
-```
-
-### Linux
-
-与 Windows 相同的版本解析规则：`--version` 可省略，不显式指定时读取静态版本索引、排除 dev/alpha，并按 semver 从新到旧探测下载源，取实际可用的最新版；离线归档按文件名推断版本。可以直接使用 Release 附带的安装脚本：
+## 4. 手动下载与校验
 
 ```sh
-curl -fsSLO https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.sh
-sh install.sh --version 0.2.2-rc.1
+TAG=v0.2.2-rc.1
+BASE=https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases/download
+
+curl -fLO "$BASE/$TAG/dsh-v0.2.2-rc.1-linux-x64.tar.gz"
+curl -fLO "$BASE/$TAG/dsh-v0.2.2-rc.1-linux-x64.tar.gz.sha256"
+sha256sum -c dsh-v0.2.2-rc.1-linux-x64.tar.gz.sha256
 ```
 
-仓库内的 `install.sh` 与发布产物等价，常用形式：
+Windows 产物为 `dsh-v0.2.2-rc.1-win-x64.zip`（附同名 `.sha256`）。
+
+产物命名规则：`dsh-v<版本>-<平台>-<架构>.<ext>`，平台当前仅 `linux-x64` 与 `win-x64`。
+
+## 5. 同步机制（CNB 云原生构建）
+
+仓库根目录 `.cnb.yml` 定义了三条触发方式，都执行同一个同步脚本 `scripts/sync-release.mjs`：
+
+| 触发方式 | 说明 |
+| --- | --- |
+| `crontab: 0 3 * * *` | 每天 03:00（Asia/Shanghai）自动检查并同步 |
+| `web_trigger` | 仓库页面「云原生构建」手动点击运行 |
+| `api_trigger` | `cnb-rs build start -e api_trigger` / OPENAPI 触发 |
+
+### 页面自定义按钮
+
+在 **代码 → 分支详情页（main）** 顶部可直接点击（配置见 `.cnb/web_trigger.yml`）：
+
+| 按钮 | 事件 | 作用 |
+| --- | --- | --- |
+| 立即同步 GitHub 产物 | `web_trigger_sync` | 全量：代码镜像 + Release 产物 + 主页 README（默认按钮） |
+| 仅同步 Release 产物 | `web_trigger_sync_release` | 只搬运 Release 附件，不动代码 |
+| 刷新主页 README | `web_trigger_readme` | 用 `doc/INSTALL-CNB.md` 重新生成主页 README |
+
+> 按钮仅在「代码-分支详情页」显示；需要有仓库写权限才能触发。
+
+每条流水线包含两个 Stage：
+
+| Stage | 镜像 | 作用 |
+| --- | --- | --- |
+| `sync-code-from-github` | `node:22` | 跑 `scripts/sync-code-from-github.sh`：镜像 GitHub 的分支、tag、完整提交历史；在 main 之上追加一次主页 `README.md` 生成提交 |
+| `sync-release` | `node:22` | 同步 GitHub Release 的说明与附件（幂等） |
+
+> **为什么不用 `tencentcom/git-sync` 的 pull 模式**：它内部是 `git pull --rebase`，会把 CNB 侧那条
+> 「docs: 更新 CNB 主页 README」提交重放到 GitHub 历史之上。而 `README.md` 在两边本就是有意不同的
+> （GitHub 放项目说明，CNB 放本手册生成的内容），只要 GitHub 侧动过 README，rebase 必然 `CONFLICT`，
+> 后续 Stage 全部 skipped。现在改为「以 GitHub main 为基线重建 main」，CNB main 恒等于
+> 「GitHub main + 1 个 README 生成提交」，无分叉、无冲突。
+
+同步脚本的行为：
+
+1. **读 GitHub 走匿名访问**：源仓库是公开的，不使用任何 Token / 密钥，只依赖 GitHub 公开 API。
+2. **写 CNB 用流水线内置 `CNB_TOKEN`**：构建结束自动销毁，权限限定在当前仓库。
+3. **幂等**：附件名与大小一致即跳过，不重复下载、不重复上传；体积变化或新增附件才补传。
+   代码镜像同样幂等——CNB 侧已与 GitHub 一致时不会产生新的 README 提交。
+4. **不触发构建**：仓库设置里「推送自动触发」为关闭状态，只有定时任务会跑起来。
+5. **提交历史**：CNB 仓库保留 GitHub 的全部 commit（当前 19 个 GitHub 提交 + CNB 侧文档提交），可用
+   `GET https://api.cnb.cool/aixx.work/dsh-cli-standalone/-/git/commits?page_size=100` 查看
+   （注意分页参数是 `page_size`，不是 `per_page`）。
+
+手动触发一次：
 
 ```sh
-./install.sh                                                 # 在线，自动解析最新 release
-./install.sh --version 0.2.2-rc.1                            # 在线，显式版本
-./install.sh --github-proxy https://gitproxy.dev             # 在线，走 GitHub 加速代理
-./install.sh --archive ./dsh-v0.2.2-rc.1-linux-x64.tar.gz    # 离线，版本从归档名解析
-curl -fsSL https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.sh | sh
+cnb-rs build start --repo aixx.work/dsh-cli-standalone -b main -e api_trigger
+cnb-rs build watch <sn> --repo aixx.work/dsh-cli-standalone
 ```
 
-`--version`／`--base-url`／`--releases-json-url`／`--github-proxy`／`--prefix` 缺省时依次读取环境变量 `DSH_VERSION`／`DSH_BASE_URL`／`DSH_RELEASES_JSON_URL`／`DSH_GH_PROXY`／`DSH_PREFIX`（`curl ... | sh` 场景用环境变量传参）。代理行为与 Windows 一致：外层 `curl` 的 URL 需自行加代理前缀；解析走不通时显式 `DSH_VERSION` 可绕开索引读取。
-
-完全离线的本地归档安装（归档旁的 `.sha256` 或 `--checksum` 存在时校验，二者皆无则跳过验证并提示）：
+本地一次性同步（镜像代码 + 同步产物 + 设置触发策略）：
 
 ```sh
-./install.sh \
-  --archive ./dsh-v0.2.2-rc.1-linux-x64.tar.gz
+export CNB_TOKEN=...            # 或 cnb-rs auth login
+bash scripts/sync-cnb.sh --repo aixx.work/dsh-cli-standalone
 ```
 
-```powershell
-.\install.ps1 `
-  -Archive .\dsh-v0.2.2-rc.1-win-x64.zip
-```
+## 6. 社区可借鉴的实现
 
-Linux 默认安装到 `~/.local/share/dsh/versions/<version>`，shim 为 `~/.local/bin/dsh`，必要时更新 `~/.profile`。Windows 默认安装到 `%LOCALAPPDATA%\Programs\dsh`，shim 位于其 `bin\dsh.cmd`，必要时更新用户 PATH。
+| 工具 | 用途 |
+| --- | --- |
+| [tencentcom/git-sync](https://cnb.cool/cnb/plugins/tencentcom/git-sync) | 官方代码同步插件，支持 push / rebase / pull 三种模式；**本仓库未使用**（pull 模式在「两边 README 有意不同」的场景下会反复冲突） |
+| [.cnb/web_trigger.yml](https://docs.cnb.cool/zh/build/web-trigger.html) | 仓库页面自定义按钮（手动触发流水线） |
+| [mpgrm](https://cnb.cool/zhiqiangwang/mpgrm)（gsync 继任者） | 跨平台同步 Release 与附件，镜像 `docker.cnb.cool/zhiqiangwang/mpgrm:latest` |
+| [cnbcool/attachments](https://cnb.cool/cnb/plugins/cnbcool/attachments) | 官方附件插件，在流水线里给 Release 上传 / 下载附件 |
+| [git-cnb](https://cnb.cool/looc/git-cnb) | `git` 风格的 CNB 命令行扩展，可在流水线里查 Release 等信息 |
+| [cnb-rs](https://cnb.wwvo.fun) | 官方社区 CLI：`release create/upload/view`、`repo settings pipeline`、`build watch` 等 |
 
-使用 `--prefix`／`-Prefix` 可改变安装位置；`--no-modify-path`／`-NoModifyPath` 禁止修改 PATH 配置，并在输出中给出手工配置路径。已存在的同版本目录不会被覆盖。
+## 7. 常见问题
 
-## 安装器回归测试
+**Q：安装脚本提示无法解析最新版本？**
+版本解析默认读取 GitHub Pages 的静态索引（`https://rainechoa.github.io/dsh-cli-standalone/releases.json`，匿名可达，不依赖任何登录接口），再探测 CNB 上产物是否已同步。
+若运行环境访问不到 github.io，可把 `DSH_RELEASES_JSON_URL` 指向任意可达的索引副本，或显式设置 `DSH_VERSION` 绕开索引（见第 2 / 3 节）。
 
-```sh
-node tests/installer-regression.mjs \
-  --archive dist/dsh-v0.2.2-rc.1-linux-x64.tar.gz \
-  --version 0.2.2-rc.1
-```
+**Q：下载 404？**
+确认版本号与 tag 一致（`DSH_VERSION` 不带 `v`，tag 带 `v`），并确认该版本已同步到 CNB：
+<https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases>。自动解析只会选中探测（HEAD 等价的 `.sha256` 请求返回 200）确认存在的版本，正常不会出现「解析成功但下载 404」。
 
-覆盖：缺少校验和、归档被篡改、归档与版本不匹配、路径含空格的有效安装、shim 执行、重复版本拒绝且不删除旧目录、篡改后重装保持旧启动器可用，以及 Linux PATH 写入／Windows 禁止 PATH 修改。
+**Q：CNB 上的产物和 GitHub 不一致？**
+定时任务每天 03:00 同步一次（GitHub 侧扫描/构建在 21:00 之后进行，CNB 侧等其结束再搬运产物）；
+滞后期间安装脚本会自动装「CNB 上已同步的最新版」，也可手动触发 `web_trigger` / `api_trigger` 流水线立即同步。
 
-## GitHub Actions
-
-`.github/workflows/ci.yml`（main 分支 push、pull request、手动触发）包含：
-
-- Ubuntu 与 Windows 独立构建、解包验证、Web GUI 请求和安装器正负分支；
-- CentOS 8 容器内无预装 Node.js 的安装与再次解包验证；
-- 上传带 SHA-256 的平台归档为 workflow artifact。
-
-`.github/workflows/release.yml`（`v*` 标签 push、手动触发）复用同一套构建与验证，全部通过后将产物发布到 GitHub Release，见“发布”。
-
-`.github/workflows/daily-version-scan.yml`（定时每天 21:00 北京时间、手动触发）扫描 npm 上 `@deepseek-ai/dsh` 的最新版本（排除 dev/alpha，semver 优先级取最大）：发现新的**稳定版**时自动触发 `release` 工作流发布（失败次日自动重试）；发现 rc/beta 时创建或更新跟踪 issue 等待人工确认。
-
-CentOS 8 容器只证明 **glibc 2.28 用户空间兼容性**。容器使用宿主机内核，因此不能据此宣称已验证 CentOS 8 的 4.18 内核或 Landlock 降级行为。
-
-## Release 版本页面
-
-每次 Release 成功后，工作流会通过 GitHub Pages 发布静态版本索引，页面访问时不依赖 GitHub API。也可以在 Actions 页面手动运行 `pages` 工作流，直接刷新索引而无需重新构建或发布安装包：
-
-- 人工查看：<https://rainechoa.github.io/dsh-cli-standalone/>
-- 程序读取：<https://rainechoa.github.io/dsh-cli-standalone/releases.json>
-
-JSON 包含 `versions` 版本号数组及 `releases` 详细信息，保留所有非草稿 Release（包括 rc/beta 预发布），可供 CNB 等没有公开 Release 查询接口的平台使用。安装脚本已直接消费这份索引：候选版本按 semver 排序后逐个探测 `<base-url>/v<版本>/…sha256`（200 = 镜像已同步，404 = 尚未同步，其余错误硬失败），选中「下载源上可用的最新版」：
-
-```sh
-curl -fsSL https://rainechoa.github.io/dsh-cli-standalone/releases.json
-```
-
-首次部署前需在仓库 Settings → Pages 中将 Source 设为 **GitHub Actions**。本地可用 `npm run build:release-page` 重新生成到 `dist-pages/`，用 `npm run test:release-page` 验证分页、草稿过滤和页面输出。
-
-## 发布
-
-发布走 GitHub Actions，不在本机手工上传产物。两种触发方式：
-
-```sh
-git tag v0.2.2-rc.2
-git push origin v0.2.2-rc.2
-```
-
-或在仓库的 Actions 页面手动运行 `release` 工作流并输入版本号（如 `0.2.2-rc.2`）；手动触发会自动创建 `v<version>` 标签。
-
-发布前，工作流会完整执行与 CI 相同的构建与验证（两个平台独立构建、解包验证、Web GUI 请求、安装器正负分支、CentOS 8 容器复验、发布前再次核对 SHA-256），任何一步失败都不会创建 Release。重跑同一版本是安全的：同名资产会被覆盖更新。
-
-Release `v<version>` 包含以下资产，与安装脚本的下载约定一致：
-
-```text
-dsh-v<version>-linux-x64.tar.gz      + .sha256
-dsh-v<version>-win-x64.zip           + .sha256
-install.sh
-install.ps1
-```
-
-版本号带 `-`（如 `0.2.2-rc.1`）会自动标记为 prerelease。
-
-## 防静默失效约束
-
-- 目标平台与构建机不一致：硬失败。
-- 请求版本与 npm 实际安装版本不一致：硬失败。
-- Node.js 或 dsh 归档校验和错误：硬失败，不创建安装前缀。
-- 离线归档旁存在 `.sha256` 或显式给出校验和时：必须校验，错误硬失败；两者都缺省时跳过验证，并在输出中明示（不静默跳过）。
-- 归档包含绝对路径或 `..` 路径项：硬失败。
-- 安装后版本输出不符：硬失败。
-- 下载失败：返回非零，不自动切换镜像或版本。
-- 版本自动解析（未指定 `-Version` 时）：索引 JSON 不可读、排除 dev/alpha 后无候选版本、或探测出错（非 404 的 HTTP 错误/网络错误）：硬失败；镜像滞后导致候选版本在下载源上 404：按 semver 从新到旧回退到实际可用的版本；镜像上没有任何已索引版本：硬失败。
-- 离线归档文件名无法推断版本，或平台与当前系统不符：硬失败。
-
-## 性能实验记录
-
-- `doc/iops-benchmark.md`：中移云电脑上 npm 安装 dsh 的计时分解与磁盘 IOPS 基准测试过程（winsat + Node 微基准，脚本同目录）。结论：此类高带宽、低随机、高元数据延迟的虚拟盘会把 npm 安装放大约 10 倍，瓶颈不在带宽，standalone 预解包方案对该类环境收益明显。
-
-## 许可证
-
-本仓库打包与安装脚本使用 MIT。DeepSeek Harness、Node.js 及依赖分别遵循其原始许可证；归档保留 Node.js LICENSE、npm 包元数据及随依赖发布的许可证文件。
+**Q：能完全脱离 GitHub 做版本解析吗？**
+可以：`releases.json` 是随每次 Release 生成的静态文件，把它同步到 CNB 仓库（如提交到仓库根目录，
+由 `sync-release` 阶段顺带搬运），再把 `DSH_RELEASES_JSON_URL` 指向
+`https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/releases.json` 即可。
