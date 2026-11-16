@@ -15,12 +15,12 @@ Options:
                             installation proceeds unverified when neither exists
   --prefix <directory>      Installation prefix (default: $HOME/.local)
   --base-url <url>          Release download URL without a trailing slash
-  --releases-api-url <url>  Release listing API used for version resolution
+  --releases-json-url <url> Release index JSON used for version resolution
   --github-proxy <url>      GitHub acceleration proxy (e.g. https://api.gitproxy.dev);
                             rewrites default GitHub URLs into "<proxy>/<original url>"
   --no-modify-path          Do not append $prefix/bin to $HOME/.profile
 
-Environment: DSH_VERSION, DSH_BASE_URL, DSH_RELEASES_API_URL, DSH_GH_PROXY and
+Environment: DSH_VERSION, DSH_BASE_URL, DSH_RELEASES_JSON_URL, DSH_GH_PROXY and
 DSH_PREFIX are honored when the matching option is not given.
 
 Without --archive, both the archive and its .sha256 file are downloaded from:
@@ -52,7 +52,8 @@ github_url() {
 }
 
 # Semver parse/compare + dev/alpha exclusion, mirroring scripts/scan-latest-version.mjs and
-# install.ps1 so every entry point resolves the same "latest" version.
+# install.ps1 so every entry point resolves the same versions. Prints every eligible version,
+# one per line, in descending semver order (newest first) for availability probing.
 resolve_latest_awk=$(cat <<'AWK'
 function cmp_core(a, b, x, y, i) {
   split(a, x, "."); split(b, y, ".")
@@ -82,33 +83,77 @@ function cmp(a_core, a_pre, a_n, b_core, b_pre, b_n, ap, bp, i, an, bn, anum, bn
   v = $0
   sub(/^v/, "", v)
   if (v !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/) next
-  core = v; pre = ""; npre = 0
+  core_v = v; pre_v = ""; npre_v = 0
   dash = index(v, "-")
-  if (dash > 0) { core = substr(v, 1, dash - 1); pre = substr(v, dash + 1); npre = split(pre, tmp, ".") }
-  if (npre > 0 && (tolower(tmp[1]) == "dev" || tolower(tmp[1]) == "alpha")) next
-  if (have == 0 || cmp(core, pre, npre, best_core, best_pre, best_n) > 0) {
-    have = 1; best_core = core; best_pre = pre; best_n = npre; best = v
-  }
+  if (dash > 0) { core_v = substr(v, 1, dash - 1); pre_v = substr(v, dash + 1); npre_v = split(pre_v, tmp, ".") }
+  if (npre_v > 0 && (tolower(tmp[1]) == "dev" || tolower(tmp[1]) == "alpha")) next
+  m++
+  core[m] = core_v; pre[m] = pre_v; npre[m] = npre_v; ver[m] = v
 }
-END { if (have) print best }
+END {
+  for (i = 1; i <= m; i++) {
+    for (j = i + 1; j <= m; j++) {
+      if (cmp(core[j], pre[j], npre[j], core[i], pre[i], npre[i]) > 0) {
+        t_core = core[i]; core[i] = core[j]; core[j] = t_core
+        t_pre = pre[i]; pre[i] = pre[j]; pre[j] = t_pre
+        t_n = npre[i]; npre[i] = npre[j]; npre[j] = t_n
+        t_ver = ver[i]; ver[i] = ver[j]; ver[j] = t_ver
+      }
+    }
+  }
+  for (i = 1; i <= m; i++) print ver[i]
+}
 AWK
 )
 
-resolve_latest_version() {
-  rl_api=$(github_url "$releases_api_url")
-  case $rl_api in
-    *\?*) rl_api="$rl_api&per_page=100" ;;
-    *) rl_api="$rl_api?per_page=100" ;;
-  esac
-  echo "Resolving latest dsh release from $rl_api" >&2
+# Probe a release asset at the download base (through the GitHub proxy rewrite when set):
+# 200 means the mirror actually has the version, 404 means it is not synced there yet, and
+# anything else (or a transport error) is a hard failure rather than a silent skip.
+release_available() {
+  ra_url=$(github_url "$1")
   if [ "$downloader" = curl ]; then
-    rl_json=$(curl --fail --location --silent --show-error --connect-timeout 20 --max-time 120 "$rl_api") || fail "failed to list dsh releases from $rl_api"
+    ra_code=$(curl --location --silent --output /dev/null --connect-timeout 20 --max-time 120 --write-out '%{http_code}' "$ra_url") \
+      || fail "failed to probe $ra_url (network error)"
+    case $ra_code in
+      200) return 0 ;;
+      404) return 1 ;;
+      *) fail "unexpected HTTP $ra_code from $ra_url" ;;
+    esac
   else
-    rl_json=$(wget -q -O - "$rl_api") || fail "failed to list dsh releases from $rl_api"
+    if wget -q -O /dev/null "$ra_url"; then
+      return 0
+    else
+      ra_rc=$?
+      [ "$ra_rc" -eq 8 ] || fail "failed to probe $ra_url (wget exit $ra_rc)"
+      return 1
+    fi
   fi
-  rl_best=$(printf '%s' "$rl_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | sed -E 's/^"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*$/\1/' | awk "$resolve_latest_awk")
-  [ -n "$rl_best" ] || fail "no installable dsh release found at $rl_api (dev/alpha prereleases excluded)"
-  echo "Resolved dsh version: $rl_best (from the release list)" >&2
+}
+
+# Resolve the newest indexed release whose assets are actually downloadable from $base_url:
+# the release index may be fresher than a mirror (e.g. CNB syncs daily), so a version that
+# is listed but not yet mirrored must be skipped, never installed-and-failed halfway.
+resolve_latest_version() {
+  rl_url=$releases_json_url
+  echo "Resolving latest dsh version from $rl_url" >&2
+  if [ "$downloader" = curl ]; then
+    rl_json=$(curl --fail --location --silent --show-error --connect-timeout 20 --max-time 120 "$rl_url") || fail "failed to read the dsh releases JSON from $rl_url"
+  else
+    rl_json=$(wget -q -O - "$rl_url") || fail "failed to read the dsh releases JSON from $rl_url"
+  fi
+  rl_candidates=$(printf '%s' "$rl_json" | { grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' || true; } | sed -E 's/^"version"[[:space:]]*:[[:space:]]*"([^"]+)".*$/\1/' | awk "$resolve_latest_awk")
+  [ -n "$rl_candidates" ] || fail "no installable dsh release found in $rl_url (dev/alpha prereleases excluded)"
+  rl_best=
+  for rl_version in $rl_candidates; do
+    rl_probe=$base_url/v$rl_version/dsh-v$rl_version-linux-x64.tar.gz.sha256
+    echo "Probing $rl_probe" >&2
+    if release_available "$rl_probe"; then
+      rl_best=$rl_version
+      break
+    fi
+  done
+  [ -n "$rl_best" ] || fail "no release listed in $rl_url is available for download at $base_url; the download source may lag behind the index"
+  echo "Resolved dsh version: $rl_best (newest available at $base_url)" >&2
   printf '%s' "$rl_best"
 }
 
@@ -117,14 +162,14 @@ archive=
 checksum=
 prefix=${DSH_PREFIX:-"$HOME/.local"}
 base_url=${DSH_BASE_URL:-https://github.com/RainEchoA/dsh-cli-standalone/releases/download}
-releases_api_url=${DSH_RELEASES_API_URL:-https://api.github.com/repos/RainEchoA/dsh-cli-standalone/releases}
+releases_json_url=${DSH_RELEASES_JSON_URL:-https://rainechoa.github.io/dsh-cli-standalone/releases.json}
 github_proxy=${DSH_GH_PROXY:-}
 modify_path=1
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
-    --version|--archive|--checksum|--prefix|--base-url|--releases-api-url|--github-proxy)
+    --version|--archive|--checksum|--prefix|--base-url|--releases-json-url|--github-proxy)
       [ "$#" -ge 2 ] || fail "$1 requires a value"
       case "$1" in
         --version) version=$2 ;;
@@ -132,7 +177,7 @@ while [ "$#" -gt 0 ]; do
         --checksum) checksum=$2 ;;
         --prefix) prefix=$2 ;;
         --base-url) base_url=$2 ;;
-        --releases-api-url) releases_api_url=$2 ;;
+        --releases-json-url) releases_json_url=$2 ;;
         --github-proxy) github_proxy=$2 ;;
       esac
       shift 2

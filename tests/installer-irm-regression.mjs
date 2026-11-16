@@ -76,6 +76,19 @@ async function main() {
   writeFileSync(`${archive}.sha256`, `${hash}  dsh-v${version}-win-x64.zip\n`)
 
   const releaseTags = ['v2.0.0-alpha.1', 'v2.0.0-dev.3', 'v1.0.1-rc.1', 'v1.0.0', 'v0.3.0-beta.1', 'v0.2.9']
+  const index = {
+    schemaVersion: 1,
+    repository: 'example/project',
+    generatedAt: '2026-01-01T00:00:00Z',
+    versions: releaseTags.map((tag) => tag.replace(/^v(?=\d)/, '')),
+    releases: releaseTags.map((tag) => ({
+      version: tag.replace(/^v(?=\d)/, ''),
+      tag,
+      prerelease: tag.includes('-'),
+      publishedAt: '2026-01-01T00:00:00Z',
+      url: `https://github.com/example/project/releases/tag/${tag}`,
+    })),
+  }
   const requestedPaths = []
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1')
@@ -85,8 +98,11 @@ async function main() {
       res.end(body)
     }
     if (url.pathname === '/install.ps1') return respond(200, installerSource)
-    if (url.pathname.endsWith('/releases')) {
-      return respond(200, JSON.stringify(releaseTags.map((tag) => ({ tag_name: tag }))), 'application/json')
+    if (url.pathname === '/releases.json') {
+      return respond(200, JSON.stringify(index), 'application/json')
+    }
+    if (/^\/https:\/\/github\.com\/.*\/dsh-v.+-win-x64\.zip\.sha256$/.test(url.pathname)) {
+      return respond(200, 'ok')
     }
     return respond(404, 'not found')
   })
@@ -161,29 +177,32 @@ async function main() {
     assert(/unsafe version/i.test(result.output), 'unsafe version message surfaced', result.output)
   }
 
-  // 4. No version anywhere and a dead release API -> hard failure, not a silent guess.
+  // 4. No version anywhere and a dead release index URL -> hard failure, not a silent guess.
   {
     const result = await runCase('noversion', {
-      DSH_RELEASES_API_URL: `http://127.0.0.1:${port}/nope`,
+      DSH_RELEASES_JSON_URL: `http://127.0.0.1:${port}/nope`,
       DSH_PREFIX: join(temp, 'noversion prefix'),
       DSH_NO_MODIFY_PATH: '1',
     })
     assert(result.status !== 0, 'unresolvable version fails non-zero', result.output)
-    assert(/failed to list dsh releases/i.test(result.output), 'release API failure surfaced', result.output)
+    assert(/failed to read the dsh releases json/i.test(result.output), 'release index failure surfaced', result.output)
   }
 
-  // 5. DSH_GH_PROXY rewrites the version API and download URLs; resolution still works.
+  // 5. The index URL is used directly (never proxied) while DSH_GH_PROXY rewrites probe
+  //    and download URLs; resolution still works.
   {
     requestedPaths.length = 0
     const prefix = join(temp, 'proxy prefix')
     const result = await runCase('proxy', {
+      DSH_RELEASES_JSON_URL: `http://127.0.0.1:${port}/releases.json`,
       DSH_GH_PROXY: `http://127.0.0.1:${port}`,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
     })
-    assert(result.status !== 0 && /resolved dsh version: 1\.0\.1-rc\.1/i.test(result.output), 'latest resolution through proxy picks 1.0.1-rc.1', result.output)
-    assert(requestedPaths.some((p) => p.startsWith('/https://api.github.com/')), 'version API request rewritten through proxy', JSON.stringify(requestedPaths))
-    assert(requestedPaths.some((p) => p.startsWith('/https://github.com/')), 'download request rewritten through proxy', JSON.stringify(requestedPaths))
+    assert(result.status !== 0 && /resolved dsh version: 1\.0\.1-rc\.1/i.test(result.output), 'latest resolution picks 1.0.1-rc.1', result.output)
+    assert(requestedPaths.includes('/releases.json'), 'release index JSON fetched directly', JSON.stringify(requestedPaths))
+    assert(requestedPaths.some((p) => p.startsWith('/https://github.com/') && p.endsWith('.sha256')), 'availability probe rewritten through proxy', JSON.stringify(requestedPaths))
+    assert(requestedPaths.some((p) => p.startsWith('/https://github.com/') && !p.endsWith('.sha256')), 'download request rewritten through proxy', JSON.stringify(requestedPaths))
   }
 
   await new Promise((close) => server.close(close))

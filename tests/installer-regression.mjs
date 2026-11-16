@@ -80,20 +80,43 @@ async function main() {
     const [command, commandArgs] = installerInvocation(root, platform, installerArgs)
     return invoke(command, commandArgs, { env })
   }
-  // Version resolution must skip dev/alpha prereleases and pick the semver maximum on any
-  // platform. The proxy flag under test points at this stub server, so the version API
-  // and download requests must arrive rewritten as "<proxy>/https://api.github.com/..."
-  // and "<proxy>/https://github.com/..."; the download then 404s on purpose, so the run
-  // must fail while still having logged which version it resolved.
-  const exerciseResolution = async (proxyFlag, env) => {
+  // Version resolution must skip dev/alpha prereleases, order candidates by semver, and
+  // probe the download base for availability: the index can be fresher than the mirror.
+  // The stub serves the static releases.json shape published with every release;
+  // --releases-json-url points straight at it (explicit URLs are never proxied), while the
+  // --github-proxy flag points at the same stub, so probe and download requests must
+  // arrive rewritten as "<proxy>/https://github.com/..."; the archive download then 404s
+  // on purpose, so every run must fail while still having logged which version it resolved.
+  const exerciseResolution = async (jsonFlag, proxyFlag, env) => {
     const releaseTags = ['v2.0.0-alpha.1', 'v2.0.0-dev.3', 'v1.0.1-rc.1', 'v1.0.0', 'v0.3.0-beta.1', 'v0.2.9', 'not-a-semver']
+    const index = {
+      schemaVersion: 1,
+      repository: 'example/project',
+      generatedAt: '2026-01-01T00:00:00Z',
+      versions: releaseTags.map((tag) => tag.replace(/^v(?=\d)/, '')),
+      releases: releaseTags.map((tag) => ({
+        version: tag.replace(/^v(?=\d)/, ''),
+        tag,
+        prerelease: tag.includes('-'),
+        publishedAt: '2026-01-01T00:00:00Z',
+        url: `https://github.com/example/project/releases/tag/${tag}`,
+      })),
+    }
     const requestedPaths = []
+    let missingProbes = new Set()
     const apiServer = createServer((req, res) => {
       const url = new URL(req.url, 'http://127.0.0.1')
       requestedPaths.push(url.pathname)
-      if (url.pathname.endsWith('/releases')) {
+      if (url.pathname === '/releases.json') {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(releaseTags.map((tag) => ({ tag_name: tag }))))
+        res.end(JSON.stringify(index))
+        return
+      }
+      const probe = /^\/https:\/\/github\.com\/.*\/dsh-v(.+)-(linux|win)-x64\.(?:tar\.gz|zip)\.sha256$/.exec(url.pathname)
+      if (probe) {
+        const missing = missingProbes.has(probe[1])
+        res.writeHead(missing ? 404 : 200, { 'content-type': 'text/plain' })
+        res.end(missing ? 'not found' : 'ok')
         return
       }
       res.writeHead(404, { 'content-type': 'text/plain' })
@@ -102,20 +125,50 @@ async function main() {
     await new Promise((listen) => apiServer.listen(0, '127.0.0.1', listen))
     try {
       const apiPort = apiServer.address().port
-      const resolvedPrefix = join(temp, `resolved-prefix-${platform}`)
-      const resolutionResult = await runInstaller([
-        proxyFlag, `http://127.0.0.1:${apiPort}`,
-        prefixFlag, resolvedPrefix, noPathFlag,
-      ], env)
-      assertFailure(resolutionResult, 'latest-release resolution excludes dev/alpha', 'resolved dsh version: 1.0.1-rc.1')
-      if (existsSync(resolvedPrefix)) throw new Error('Resolution failure created the installation prefix')
-      if (!requestedPaths.some((p) => p.startsWith('/https://api.github.com/'))) {
-        throw new Error(`version API was not rewritten through the proxy: ${JSON.stringify(requestedPaths)}`)
+      const runCase = async (label, missing, expectedText) => {
+        requestedPaths.length = 0
+        missingProbes = new Set(missing)
+        const resolvedPrefix = join(temp, `resolved-prefix-${platform}-${label}`)
+        const resolutionResult = await runInstaller([
+          jsonFlag, `http://127.0.0.1:${apiPort}/releases.json`,
+          proxyFlag, `http://127.0.0.1:${apiPort}`,
+          prefixFlag, resolvedPrefix, noPathFlag,
+        ], env)
+        assertFailure(resolutionResult, label, expectedText)
+        if (existsSync(resolvedPrefix)) throw new Error(`${label} created the installation prefix`)
       }
-      if (!requestedPaths.some((p) => p.startsWith('/https://github.com/'))) {
+      const probePathsFor = (version) => requestedPaths.filter((p) => p.endsWith('.sha256') && p.includes(`dsh-v${version}-`))
+
+      // Newest indexed version is already mirrored: exactly one probe, then the download.
+      await runCase('resolution-excludes-dev-alpha', [], 'resolved dsh version: 1.0.1-rc.1')
+      if (!requestedPaths.includes('/releases.json')) {
+        throw new Error(`release index JSON was not fetched directly: ${JSON.stringify(requestedPaths)}`)
+      }
+      if (probePathsFor('1.0.1-rc.1').length !== 1) {
+        throw new Error(`expected exactly one availability probe for 1.0.1-rc.1: ${JSON.stringify(requestedPaths)}`)
+      }
+      for (const skipped of ['2.0.0-alpha.1', '2.0.0-dev.3', '1.0.0', '0.3.0-beta.1', '0.2.9']) {
+        if (probePathsFor(skipped).length !== 0) {
+          throw new Error(`unexpected availability probe for ${skipped}: ${JSON.stringify(requestedPaths)}`)
+        }
+      }
+      if (!requestedPaths.some((p) => p.startsWith('/https://github.com/') && !p.endsWith('.sha256'))) {
         throw new Error(`release download was not rewritten through the proxy: ${JSON.stringify(requestedPaths)}`)
       }
-      console.log('PASS: GitHub proxy rewriting applied to version API and downloads')
+      console.log('PASS: release index JSON fetched directly, newest release probed once, download rewritten through the GitHub proxy')
+
+      // Mirror lag: the newest version is indexed but not synced yet, so resolution must
+      // fall back to the newest version that actually exists at the download base.
+      await runCase('resolution-falls-back-when-mirror-lags', ['1.0.1-rc.1'], 'resolved dsh version: 1.0.0')
+      const lagProbes = requestedPaths.filter((p) => p.endsWith('.sha256'))
+      if (lagProbes.length !== 2 || !lagProbes[0].includes('dsh-v1.0.1-rc.1-') || !lagProbes[1].includes('dsh-v1.0.0-')) {
+        throw new Error(`expected probes in descending order 1.0.1-rc.1 then 1.0.0: ${JSON.stringify(lagProbes)}`)
+      }
+      console.log('PASS: resolution falls back to the newest version available at the mirror')
+
+      // Nothing indexed is downloadable: hard failure naming both sources.
+      await runCase('resolution-fails-when-mirror-is-empty', ['1.0.1-rc.1', '1.0.0', '0.3.0-beta.1', '0.2.9'], 'no release listed in')
+      console.log('PASS: empty mirror fails loudly instead of installing nothing')
     } finally {
       await new Promise((close) => apiServer.close(close))
     }
@@ -230,7 +283,7 @@ async function main() {
       assertFailure(result, 'foreign-platform archive', 'win-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 
-      await exerciseResolution('-GitHubProxy', env)
+      await exerciseResolution('-ReleasesJsonUrl', '-GitHubProxy', env)
     } else {
       const inferredPrefix = join(temp, 'inferred-version-prefix')
       copyFileSync(`${archive}.sha256`, `${isolatedArchive}.sha256`)
@@ -258,7 +311,7 @@ async function main() {
       assertFailure(result, 'foreign-platform archive', 'linux-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 
-      await exerciseResolution('--github-proxy', env)
+      await exerciseResolution('--releases-json-url', '--github-proxy', env)
     }
 
     console.log('INSTALLER_REGRESSION_PASS')

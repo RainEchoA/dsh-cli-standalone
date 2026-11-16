@@ -59,7 +59,7 @@ Windows 使用对应 ZIP 和 `--platform win`。
 
 ### Windows 一行安装
 
-与 `powershell -File .\install.ps1` 调用的是同一个脚本（取自本仓库 main 分支，不依赖 release 资产副本）。不显式指定版本时，自动检测本仓库最新 release 的 tag：按 semver 优先级取最大，排除 dev/alpha 前置版本（规则与「每日版本扫描」一致）；显式指定始终优先：
+与 `powershell -File .\install.ps1` 调用的是同一个脚本（取自本仓库 main 分支，不依赖 release 资产副本）。不显式指定版本时，读取[静态版本索引 `releases.json`](https://rainechoa.github.io/dsh-cli-standalone/releases.json)（每次 Release 后由 Pages 工作流刷新），按 semver 优先级从新到旧逐个探测下载源上产物是否实际存在（排除 dev/alpha 前置版本，规则与「每日版本扫描」一致），取「下载源上可用的最新版」——镜像同步滞后时自动回退到已同步的最新版，而不是解析出一个还下载不了的版本；显式指定始终优先：
 
 ```powershell
 irm https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.ps1 | iex
@@ -71,10 +71,10 @@ irm https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.
 - `DSH_ARCHIVE`／`DSH_CHECKSUM`：离线安装本地归档／显式 SHA-256（校验可选：有归档旁 `.sha256` 或显式值则校验，否则跳过并提示）；未设 `DSH_VERSION` 时版本从归档文件名解析。
 - `DSH_PREFIX`：安装位置，默认 `%LOCALAPPDATA%\Programs\dsh`。
 - `DSH_NO_MODIFY_PATH`：非空时禁止修改用户 PATH。
-- `DSH_BASE_URL`／`DSH_RELEASES_API_URL`：release 下载／版本解析 API 的基础地址（镜像、气隙环境）。
+- `DSH_BASE_URL`／`DSH_RELEASES_JSON_URL`：release 下载／版本索引 JSON 的地址（镜像、气隙环境）。版本索引默认值是每次 Release 后刷新的 GitHub Pages 静态 JSON，不依赖 GitHub API。
 - `DSH_GH_PROXY`：GitHub 加速代理（如 `https://api.gitproxy.dev`）；把默认 GitHub 地址（安装脚本、版本 API、release 下载）重写为 `<代理>/<原 URL>`，显式指定的 URL 参数不被重写。
 
-版本解析与下载依赖 GitHub API、raw.githubusercontent.com 及 GitHub Release 可达；气隙环境可把上述地址指向镜像。GitHub 直连受限时可用加速代理（外层 `irm` 的 URL 需自行加代理前缀；代理对 api.github.com 的支持因服务而异，解析失败时请显式设置 `DSH_VERSION`）：
+版本解析读取 GitHub Pages 的静态 JSON（`rainechoa.github.io`），下载走 `--base-url`；两者都需可达，气隙环境可把上述地址指向镜像。GitHub 直连受限时可用加速代理（外层 `irm` 的 URL 需自行加代理前缀；版本索引地址不会被代理改写，镜像场景可直接把 `DSH_RELEASES_JSON_URL` 指向可达的 JSON 副本）：
 
 ```powershell
 $env:DSH_GH_PROXY = 'https://api.gitproxy.dev'
@@ -101,7 +101,7 @@ Invoke-WebRequest -UseBasicParsing -OutFile install.ps1 https://github.com/RainE
 
 ### Linux
 
-与 Windows 相同的版本解析规则：`--version` 可省略，不显式指定时自动解析最新 release（排除 dev/alpha）；离线归档按文件名推断版本。可以直接使用 Release 附带的安装脚本：
+与 Windows 相同的版本解析规则：`--version` 可省略，不显式指定时读取静态版本索引、排除 dev/alpha，并按 semver 从新到旧探测下载源，取实际可用的最新版；离线归档按文件名推断版本。可以直接使用 Release 附带的安装脚本：
 
 ```sh
 curl -fsSLO https://github.com/RainEchoA/dsh-cli-standalone/releases/download/v0.2.2-rc.1/install.sh
@@ -118,7 +118,7 @@ sh install.sh --version 0.2.2-rc.1
 curl -fsSL https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.sh | sh
 ```
 
-`--version`／`--base-url`／`--releases-api-url`／`--github-proxy`／`--prefix` 缺省时依次读取环境变量 `DSH_VERSION`／`DSH_BASE_URL`／`DSH_RELEASES_API_URL`／`DSH_GH_PROXY`／`DSH_PREFIX`（`curl ... | sh` 场景用环境变量传参）。代理行为与 Windows 一致：外层 `curl` 的 URL 需自行加代理前缀；解析失败时显式 `DSH_VERSION` 可绕开 api.github.com。
+`--version`／`--base-url`／`--releases-json-url`／`--github-proxy`／`--prefix` 缺省时依次读取环境变量 `DSH_VERSION`／`DSH_BASE_URL`／`DSH_RELEASES_JSON_URL`／`DSH_GH_PROXY`／`DSH_PREFIX`（`curl ... | sh` 场景用环境变量传参）。代理行为与 Windows 一致：外层 `curl` 的 URL 需自行加代理前缀；解析走不通时显式 `DSH_VERSION` 可绕开索引读取。
 
 完全离线的本地归档安装（归档旁的 `.sha256` 或 `--checksum` 存在时校验，二者皆无则跳过验证并提示）：
 
@@ -167,7 +167,7 @@ CentOS 8 容器只证明 **glibc 2.28 用户空间兼容性**。容器使用宿�
 - 人工查看：<https://rainechoa.github.io/dsh-cli-standalone/>
 - 程序读取：<https://rainechoa.github.io/dsh-cli-standalone/releases.json>
 
-JSON 包含 `versions` 版本号数组及 `releases` 详细信息，保留所有非草稿 Release（包括 rc/beta 预发布），可供 CNB 等没有公开 Release 查询接口的平台使用：
+JSON 包含 `versions` 版本号数组及 `releases` 详细信息，保留所有非草稿 Release（包括 rc/beta 预发布），可供 CNB 等没有公开 Release 查询接口的平台使用。安装脚本已直接消费这份索引：候选版本按 semver 排序后逐个探测 `<base-url>/v<版本>/…sha256`（200 = 镜像已同步，404 = 尚未同步，其余错误硬失败），选中「下载源上可用的最新版」：
 
 ```sh
 curl -fsSL https://rainechoa.github.io/dsh-cli-standalone/releases.json
@@ -208,7 +208,7 @@ install.ps1
 - 归档包含绝对路径或 `..` 路径项：硬失败。
 - 安装后版本输出不符：硬失败。
 - 下载失败：返回非零，不自动切换镜像或版本。
-- 版本自动解析（未指定 `-Version` 时）失败，或排除 dev/alpha 后无可用 release：硬失败。
+- 版本自动解析（未指定 `-Version` 时）：索引 JSON 不可读、排除 dev/alpha 后无候选版本、或探测出错（非 404 的 HTTP 错误/网络错误）：硬失败；镜像滞后导致候选版本在下载源上 404：按 semver 从新到旧回退到实际可用的版本；镜像上没有任何已索引版本：硬失败。
 - 离线归档文件名无法推断版本，或平台与当前系统不符：硬失败。
 
 ## 性能实验记录

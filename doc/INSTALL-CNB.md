@@ -19,20 +19,19 @@ CNB 仓库是 GitHub 源仓库的**只读镜像 + 产物分发点**：代码与 
 
 ## 2. 安装（Linux / macOS）
 
-安装脚本通过环境变量把下载源切到 CNB：
+安装脚本通过环境变量把下载源切到 CNB；版本解析默认读取 GitHub Pages 的静态索引，
+再逐个探测 CNB 上产物是否已同步，自动选「CNB 上可用的最新版」（CNB 每天 03:00 同步，
+滞后期间自动回退到已同步版本，无需显式指定版本）：
 
 ```sh
-# 1) 指定版本（不带 v 前缀）；CNB 的版本列表接口需要登录，务必显式指定
-export DSH_VERSION=0.2.2-rc.1
-
-# 2) 把 Release 下载地址切到 CNB
+# 1) 把 Release 下载地址切到 CNB
 export DSH_BASE_URL=https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases/download
 
-# 3) 执行 CNB 上的安装脚本
+# 2) 执行 CNB 上的安装脚本
 curl -fsSL https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.sh | bash
 ```
 
-等价的命令行参数形式：
+需要钉住版本时（等价形式，注意不带 `v` 前缀）：
 
 ```sh
 curl -fsSL https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.sh | bash -s -- \
@@ -42,12 +41,12 @@ curl -fsSL https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.
 
 其它可用环境变量（含义与 GitHub 安装方式一致）：
 
+- `DSH_VERSION`：显式指定 dsh 版本；缺省时按上述「索引 + 探测」自动解析。
 - `DSH_ARCHIVE`：本地归档离线安装，如 `dsh-v0.2.2-rc.1-linux-x64.tar.gz`。
 - `DSH_CHECKSUM`：显式指定 SHA-256（缺省时若归档旁有 `.sha256` 则自动校验）。
 - `DSH_PREFIX`：安装前缀，默认 `$HOME/.local`（可执行文件落在 `$HOME/.local/bin/dsh`，版本目录在 `$HOME/.local/share/dsh/versions/<版本>`）。
-- `DSH_RELEASES_API_URL`：版本列表 API；**CNB 的该接口需要登录令牌**，未显式指定 `DSH_VERSION` 时请不要指向 CNB。
-- `DSH_GH_PROXY`：GitHub 加速代理（仅在仍走 GitHub 时有意义；CNB 等自定义镜像地址不会被代理改写）。
-- `--no-modify-path` / 不设置 PATH 改写：安装脚本默认把 `$PREFIX/bin` 追加到 `~/.profile`，如需保持环境不变可加该参数。
+- `DSH_RELEASES_JSON_URL`：版本索引 JSON 地址，默认 GitHub Pages 的 `releases.json`；**该地址不会被代理改写**，镜像场景可指向任何可达副本（例如自行托管在 CNB 仓库里的同步副本）。
+- `DSH_GH_PROXY`：GitHub 加速代理（仅在仍走 GitHub 下载时有意义；CNB 等自定义镜像地址不会被代理改写）。
 
 ## 3. 安装（Windows PowerShell）
 
@@ -149,17 +148,18 @@ bash scripts/sync-cnb.sh --repo aixx.work/dsh-cli-standalone
 ## 7. 常见问题
 
 **Q：安装脚本提示无法解析最新版本？**
-CNB 的 Release 列表接口（`https://api.cnb.cool/<group>/<repo>/-/releases`）需要登录令牌，匿名不可用。
-请显式设置 `DSH_VERSION`（见第 2 / 3 节），或先用 `DSH_ARCHIVE` 走本地归档安装。
+版本解析默认读取 GitHub Pages 的静态索引（`https://rainechoa.github.io/dsh-cli-standalone/releases.json`，匿名可达，不依赖任何登录接口），再探测 CNB 上产物是否已同步。
+若运行环境访问不到 github.io，可把 `DSH_RELEASES_JSON_URL` 指向任意可达的索引副本，或显式设置 `DSH_VERSION` 绕开索引（见第 2 / 3 节）。
 
 **Q：下载 404？**
 确认版本号与 tag 一致（`DSH_VERSION` 不带 `v`，tag 带 `v`），并确认该版本已同步到 CNB：
-<https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases>。
+<https://cnb.cool/aixx.work/dsh-cli-standalone/-/releases>。自动解析只会选中探测（HEAD 等价的 `.sha256` 请求返回 200）确认存在的版本，正常不会出现「解析成功但下载 404」。
 
 **Q：CNB 上的产物和 GitHub 不一致？**
 定时任务每天 03:00 同步一次（GitHub 侧扫描/构建在 21:00 之后进行，CNB 侧等其结束再搬运产物）；
-也可手动触发 `web_trigger` / `api_trigger` 流水线立即同步。
+滞后期间安装脚本会自动装「CNB 上已同步的最新版」，也可手动触发 `web_trigger` / `api_trigger` 流水线立即同步。
 
-**Q：能改成从 CNB 自动解析最新版吗？**
-可以，但需要给版本列表接口加上可访问的令牌地址（例如自建代理或带令牌的镜像 API），
-再把 `DSH_RELEASES_API_URL` 指向它。
+**Q：能完全脱离 GitHub 做版本解析吗？**
+可以：`releases.json` 是随每次 Release 生成的静态文件，把它同步到 CNB 仓库（如提交到仓库根目录，
+由 `sync-release` 阶段顺带搬运），再把 `DSH_RELEASES_JSON_URL` 指向
+`https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/releases.json` 即可。

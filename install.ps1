@@ -14,7 +14,7 @@
 #   DSH_CHECKSUM         Explicit SHA-256 for DSH_ARCHIVE
 #   DSH_PREFIX           Install location (default %LOCALAPPDATA%\Programs\dsh)
 #   DSH_BASE_URL         Release download base URL
-#   DSH_RELEASES_API_URL Release listing API used for version resolution
+#   DSH_RELEASES_JSON_URL Release index JSON used for version resolution
 #   DSH_GH_PROXY         GitHub acceleration proxy (e.g. https://api.gitproxy.dev)
 #   DSH_NO_MODIFY_PATH   Non-empty: skip the user PATH update
 
@@ -35,7 +35,7 @@ try {
             $token = [string]$tokens[$index]
             switch -Regex ($token) {
                 '^(?i)-NoModifyPath$' { $cli['NoModifyPath'] = $true }
-                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesApiUrl|GitHubProxy)$' {
+                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesJsonUrl|GitHubProxy)$' {
                     $index++
                     if ($index -ge $tokens.Count) { throw "$token requires a value" }
                     $cli[$Matches[1]] = [string]$tokens[$index]
@@ -53,7 +53,7 @@ try {
             [string]$Checksum = $env:DSH_CHECKSUM,
             [string]$Prefix = $(if ($env:DSH_PREFIX) { $env:DSH_PREFIX } else { Join-Path $env:LOCALAPPDATA 'Programs\dsh' }),
             [string]$BaseUrl = $(if ($env:DSH_BASE_URL) { $env:DSH_BASE_URL } else { 'https://github.com/RainEchoA/dsh-cli-standalone/releases/download' }),
-            [string]$ReleasesApiUrl = $(if ($env:DSH_RELEASES_API_URL) { $env:DSH_RELEASES_API_URL } else { 'https://api.github.com/repos/RainEchoA/dsh-cli-standalone/releases' }),
+            [string]$ReleasesJsonUrl = $(if ($env:DSH_RELEASES_JSON_URL) { $env:DSH_RELEASES_JSON_URL } else { 'https://rainechoa.github.io/dsh-cli-standalone/releases.json' }),
             [string]$GitHubProxy = $env:DSH_GH_PROXY,
             [switch]$NoModifyPath
         )
@@ -125,35 +125,63 @@ try {
             return $Url
         }
 
-        function Resolve-DshLatestVersion([string]$ApiUrl) {
-            $base = Resolve-GitHubUrl $ApiUrl
-            $uri = if ($base -match '\?') { "$base&per_page=100" } else { "$base`?per_page=100" }
-            Write-Host "Resolving latest dsh release from $uri"
-            $releases = $null
+        # Probe a release asset at the download base (through the GitHub proxy rewrite when
+        # set): 200 means the mirror actually has the version, 404 means it is not synced
+        # there yet, and anything else (or a transport error) is a hard failure.
+        function Test-DshReleaseAvailable([string]$Version) {
+            $uri = Resolve-GitHubUrl "$BaseUrl/v$Version/dsh-v$Version-win-x64.zip.sha256"
             try {
-                $releases = Invoke-RestMethod -Uri $uri -TimeoutSec 120 -Headers @{
-                    'Accept'     = 'application/vnd.github+json'
-                    'User-Agent' = 'dsh-cli-standalone-installer'
-                }
+                $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 120
+                return ($response.StatusCode -eq 200)
             } catch {
-                throw "Failed to list dsh releases from ${uri}: $($_.Exception.Message)"
+                $status = $null
+                if ($_.Exception.Response) {
+                    try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+                }
+                if ($status -eq 404) { return $false }
+                throw "Failed to probe ${uri}: $($_.Exception.Message)"
+            }
+        }
+
+        # Resolve the newest indexed release whose assets are actually downloadable from
+        # $BaseUrl: the release index may be fresher than a mirror (e.g. CNB syncs daily),
+        # so a version that is listed but not yet mirrored must be skipped, never
+        # installed-and-failed halfway.
+        function Resolve-DshLatestVersion([string]$JsonUrl) {
+            Write-Host "Resolving latest dsh version from $JsonUrl"
+            $payload = $null
+            try {
+                $payload = Invoke-RestMethod -Uri $JsonUrl -TimeoutSec 120
+            } catch {
+                throw "Failed to read the dsh releases JSON from ${JsonUrl}: $($_.Exception.Message)"
+            }
+            if ($null -eq $payload -or $null -eq $payload.releases) {
+                throw "The document at ${JsonUrl} is not a usable dsh releases index (missing or empty 'releases' array)"
             }
             $eligible = @()
-            foreach ($release in @($releases)) {
-                $tag = "$($release.tag_name)"
-                if ($tag.StartsWith('v')) { $tag = $tag.Substring(1) }
+            foreach ($release in @($payload.releases)) {
+                $tag = "$($release.version)"
                 $parsed = ConvertTo-DshSemVer $tag
                 if ($null -eq $parsed) { continue }
                 if ($parsed.Pre -and $parsed.Pre[0] -match '^(dev|alpha)$') { continue }
                 $eligible += [pscustomobject]@{ Version = $tag; Parsed = $parsed }
             }
-            if ($eligible.Count -eq 0) { throw "No installable dsh release found at $uri (dev/alpha prereleases excluded)" }
-            $best = $eligible[0]
-            foreach ($candidate in ($eligible | Select-Object -Skip 1)) {
-                if ((Compare-DshSemVer $candidate.Parsed $best.Parsed) -gt 0) { $best = $candidate }
+            if ($eligible.Count -eq 0) { throw "No installable dsh release found in $JsonUrl (dev/alpha prereleases excluded)" }
+            for ($i = 0; $i -lt $eligible.Count; $i++) {
+                for ($j = $i + 1; $j -lt $eligible.Count; $j++) {
+                    if ((Compare-DshSemVer $eligible[$j].Parsed $eligible[$i].Parsed) -gt 0) {
+                        $tmp = $eligible[$i]; $eligible[$i] = $eligible[$j]; $eligible[$j] = $tmp
+                    }
+                }
             }
-            Write-Host "Resolved dsh version: $($best.Version) ($($eligible.Count) eligible releases)"
-            return "$($best.Version)"
+            foreach ($candidate in $eligible) {
+                Write-Host "Probing $BaseUrl/v$($candidate.Version)/dsh-v$($candidate.Version)-win-x64.zip.sha256"
+                if (Test-DshReleaseAvailable $candidate.Version) {
+                    Write-Host "Resolved dsh version: $($candidate.Version) (newest available at $BaseUrl)"
+                    return "$($candidate.Version)"
+                }
+            }
+            throw "No release listed in $JsonUrl is available for download at $BaseUrl; the download source may lag behind the index"
         }
 
         # Version resolution, in priority order: explicit -Version, archive file name, latest release.
@@ -173,7 +201,7 @@ try {
             }
         }
         if (-not $Version) {
-            $Version = Resolve-DshLatestVersion $ReleasesApiUrl
+            $Version = Resolve-DshLatestVersion $ReleasesJsonUrl
         }
         if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') { throw "Unsafe version string: $Version" }
 
