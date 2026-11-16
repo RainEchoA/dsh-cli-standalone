@@ -1,11 +1,26 @@
 #!/usr/bin/env node
-// Print the newest @deepseek-ai/dsh version published to npm, excluding dev/alpha prereleases.
+// Print the @deepseek-ai/dsh versions npm currently serves on its `latest` and `next`
+// dist-tags, excluding dev/alpha prereleases. `latest` is what `npm i @deepseek-ai/dsh`
+// installs; `next` is what `npm i @deepseek-ai/dsh@next` installs. When the `latest`
+// dist-tag is missing or points at an excluded version, it falls back to the newest
+// eligible published version; a missing/invalid `next` dist-tag yields next=null.
 // Stability and prerelease ordering follow semver: 0.2.2 > 0.2.2-rc.1 > 0.2.2-alpha.3 > 0.2.2-dev.1.
+//
+// Usage:
+//   node scripts/scan-latest-version.mjs          # prints the `latest` channel version
+//   node scripts/scan-latest-version.mjs --json   # prints {"latest":"...","next":"..."|null}
 const REGISTRY_URL = 'https://registry.npmjs.org/@deepseek-ai%2fdsh'
+
+const args = process.argv.slice(2)
+const jsonMode = args.includes('--json')
+if (args.length > 1 || (args.length === 1 && !jsonMode)) {
+  console.error('Usage: node scripts/scan-latest-version.mjs [--json]')
+  process.exit(2)
+}
 
 const response = await fetch(REGISTRY_URL, { headers: { accept: 'application/json' } })
 if (!response.ok) throw new Error(`npm registry request failed: HTTP ${response.status} for ${REGISTRY_URL}`)
-const { versions } = await response.json()
+const { versions, 'dist-tags': distTags = {} } = await response.json()
 
 const excluded = []
 const eligible = []
@@ -21,13 +36,25 @@ if (eligible.length === 0) {
   process.exit(1)
 }
 
-let latest = eligible[0]
+let newest = eligible[0]
 for (const candidate of eligible.slice(1)) {
-  if (compareSemver(candidate.parsed, latest.parsed) > 0) latest = candidate
+  if (compareSemver(candidate.parsed, newest.parsed) > 0) newest = candidate
 }
 
-console.error(`scan-latest-version: published=${Object.keys(versions).length} eligible=${eligible.length} excluded(dev/alpha)=${excluded.length} latest=${latest.version}`)
-console.log(latest.version)
+// A dist-tag only counts when it points at a published, eligible version.
+const channel = (tag) => {
+  const version = distTags?.[tag]
+  if (!version || !eligible.some((entry) => entry.version === version)) return null
+  return version
+}
+
+const latest = channel('latest') ?? newest.version
+const nextTag = channel('next')
+const next = nextTag && nextTag !== latest ? nextTag : null
+
+console.error(`scan-latest-version: published=${Object.keys(versions).length} eligible=${eligible.length} excluded(dev/alpha)=${excluded.length} latest=${latest} next=${next ?? '(none)'}`)
+if (jsonMode) console.log(JSON.stringify({ latest, next }))
+else console.log(latest)
 
 function parse(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(version)
