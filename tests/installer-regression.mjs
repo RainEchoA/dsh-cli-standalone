@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -265,7 +265,9 @@ async function main() {
       if (!existsSync(shortcut)) throw new Error('Desktop shortcut was not created')
       const shortcutQuery = (await invoke('powershell.exe', ['-NoProfile', '-Command', `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${shortcut}'); "$($s.TargetPath)|$($s.Arguments)"`])).stdout.trim()
       const [shortcutTarget, shortcutArgs] = shortcutQuery.split('|')
-      if (shortcutTarget !== shim) throw new Error(`Desktop shortcut targets ${shortcutTarget}; expected ${shim}`)
+      const actualShortcutTarget = realpathSync.native(shortcutTarget).toLowerCase()
+      const expectedShortcutTarget = realpathSync.native(shim).toLowerCase()
+      if (actualShortcutTarget !== expectedShortcutTarget) throw new Error(`Desktop shortcut targets ${shortcutTarget}; expected ${shim}`)
       if (shortcutArgs !== 'web') throw new Error(`Desktop shortcut arguments are ${shortcutArgs}; expected "web"`)
       console.log('PASS: Desktop shortcut targets the launcher with the web argument')
     }
