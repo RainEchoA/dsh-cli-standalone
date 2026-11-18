@@ -76,6 +76,11 @@ try {
   assert.ok(html.includes('document.execCommand(\'copy\')'))
   assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
   assert.ok(!html.includes('<script>alert(1)</script>'))
+  assert.ok(html.includes('本仓库仅提供打包与分发'))
+  assert.ok(html.includes('版权归各原权利人所有'))
+  assert.ok(html.includes('https://github.com/example/project/blob/main/LICENSE'))
+  const pagesWorkflow = readFileSync(join(root, '.github/workflows/pages.yml'), 'utf8')
+  assert.ok(pagesWorkflow.includes("if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')"))
   assert.ok(existsSync(join(temp, '.nojekyll')))
   console.log('RELEASE_PAGE_REGRESSION_PASS')
 } finally {
