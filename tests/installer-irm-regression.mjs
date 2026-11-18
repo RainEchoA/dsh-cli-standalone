@@ -54,6 +54,8 @@ function invoke(command, commandArgs, options = {}) {
 
 async function main() {
   const temp = mkdtempSync(join(tmpdir(), 'dsh-irm-regression-'))
+  const desktopDir = join(temp, 'desktop')
+  mkdirSync(desktopDir, { recursive: true })
 
   // Build a fake dsh-v<version>-win-x64.zip plus its sibling .sha256, fully offline.
   const staging = join(temp, 'staging')
@@ -143,12 +145,18 @@ async function main() {
       DSH_ARCHIVE: archive,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
+      DSH_DESKTOP_DIR: desktopDir,
     })
     assert(result.status === 0, 'irm|iex full install exits zero', result.output)
     assert(/installed dsh 0\.2\.2-rc\.1/i.test(result.output), 'install completion reported', result.output)
     const shim = await shimVersion(prefix)
     assert(shim.ok, 'installed shim reports the expected version', shim.detail)
     assert((await userPath()) === pathBefore, 'DSH_NO_MODIFY_PATH left the user PATH unchanged')
+    assert(existsSync(join(desktopDir, 'dsh.lnk')), 'desktop shortcut created in DSH_DESKTOP_DIR')
+    const shShim = join(prefix, 'bin', 'dsh')
+    assert(existsSync(shShim), 'Git Bash shim installed next to dsh.cmd')
+    const shShimText = readFileSync(shShim, 'utf8')
+    assert(!shShimText.includes('\r') && shShimText.includes('dsh.cmd'), 'Git Bash shim content is sane', shShimText)
   }
 
   // 2. Without DSH_VERSION the archive file name provides the version.
@@ -158,6 +166,7 @@ async function main() {
       DSH_ARCHIVE: archive,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_DESKTOP_SHORTCUT: '1',
     })
     assert(result.status === 0, 'version inferred from archive name under iex', result.output)
     assert(/from archive name/i.test(result.output), 'inference was reported', result.output)
@@ -172,6 +181,7 @@ async function main() {
       DSH_ARCHIVE: archive,
       DSH_PREFIX: join(temp, 'unsafe prefix'),
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_DESKTOP_SHORTCUT: '1',
     })
     assert(result.status !== 0, 'unsafe DSH_VERSION fails non-zero', result.output)
     assert(/unsafe version/i.test(result.output), 'unsafe version message surfaced', result.output)
@@ -183,6 +193,7 @@ async function main() {
       DSH_RELEASES_JSON_URL: `http://127.0.0.1:${port}/nope`,
       DSH_PREFIX: join(temp, 'noversion prefix'),
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_DESKTOP_SHORTCUT: '1',
     })
     assert(result.status !== 0, 'unresolvable version fails non-zero', result.output)
     assert(/failed to read the dsh releases json/i.test(result.output), 'release index failure surfaced', result.output)
@@ -198,11 +209,29 @@ async function main() {
       DSH_GH_PROXY: `http://127.0.0.1:${port}`,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_DESKTOP_SHORTCUT: '1',
     })
     assert(result.status !== 0 && /resolved dsh version: 1\.0\.1-rc\.1/i.test(result.output), 'latest resolution picks 1.0.1-rc.1', result.output)
     assert(requestedPaths.includes('/releases.json'), 'release index JSON fetched directly', JSON.stringify(requestedPaths))
     assert(requestedPaths.some((p) => p.startsWith('/https://github.com/') && p.endsWith('.sha256')), 'availability probe rewritten through proxy', JSON.stringify(requestedPaths))
     assert(requestedPaths.some((p) => p.startsWith('/https://github.com/') && !p.endsWith('.sha256')), 'download request rewritten through proxy', JSON.stringify(requestedPaths))
+  }
+
+  // 6. DSH_NO_DESKTOP_SHORTCUT suppresses the shortcut even when DSH_DESKTOP_DIR is set.
+  {
+    const quietDesktop = join(temp, 'quiet desktop')
+    mkdirSync(quietDesktop, { recursive: true })
+    const prefix = join(temp, 'no shortcut prefix')
+    const result = await runCase('noshortcut', {
+      DSH_VERSION: version,
+      DSH_ARCHIVE: archive,
+      DSH_PREFIX: prefix,
+      DSH_NO_MODIFY_PATH: '1',
+      DSH_DESKTOP_DIR: quietDesktop,
+      DSH_NO_DESKTOP_SHORTCUT: '1',
+    })
+    assert(result.status === 0, 'install with DSH_NO_DESKTOP_SHORTCUT exits zero', result.output)
+    assert(!existsSync(join(quietDesktop, 'dsh.lnk')), 'DSH_NO_DESKTOP_SHORTCUT created no shortcut')
   }
 
   await new Promise((close) => server.close(close))

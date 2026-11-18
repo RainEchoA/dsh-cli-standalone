@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -207,6 +207,8 @@ async function main() {
     const installPrefix = join(temp, 'install prefix with spaces')
     const home = join(temp, 'home')
     mkdirSync(home, { recursive: true })
+    const desktopDir = join(home, 'Desktop')
+    mkdirSync(desktopDir, { recursive: true })
     const installArgs = [versionFlag, options.version, archiveFlag, archive, prefixFlag, installPrefix]
     let userPathBefore
     if (platform === 'win') {
@@ -219,7 +221,7 @@ async function main() {
     for (const key of Object.keys(scrubbed)) {
       if (key.startsWith('DSH_')) delete scrubbed[key]
     }
-    const env = { ...scrubbed, HOME: home, DSH_HOME: join(home, '.dsh') }
+    const env = { ...scrubbed, HOME: home, DSH_HOME: join(home, '.dsh'), DSH_DESKTOP_DIR: desktopDir }
     result = await runInstaller(installArgs, env)
     assertSuccess(result, 'valid local archive installation')
 
@@ -239,6 +241,35 @@ async function main() {
       const userPathAfter = (await invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"])).stdout.trim()
       if (userPathAfter !== userPathBefore) throw new Error('-NoModifyPath changed the Windows user PATH')
       console.log('PASS: Windows -NoModifyPath left user PATH unchanged')
+
+      const shShim = join(installPrefix, 'bin', 'dsh')
+      const shShimContent = readFileSync(shShim, 'utf8')
+      if (shShimContent.includes('\r')) throw new Error('Git Bash shim must use LF line endings')
+      if (!shShimContent.includes('dsh.cmd')) throw new Error('Git Bash shim does not forward to dsh.cmd')
+      console.log('PASS: Git Bash shim installed next to dsh.cmd (LF endings)')
+      const bash = [
+        'C:\\Program Files\\Git\\bin\\bash.exe',
+        'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+        'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+      ].find((candidate) => existsSync(candidate))
+      if (bash) {
+        const binPosix = dirname(shShim).replace(/\\/g, '/').replace(/^([A-Za-z]):/, (match, drive) => `/${drive.toLowerCase()}`)
+        result = await invoke(bash, ['-c', `PATH="${binPosix}:$PATH" dsh --version`], { env })
+        assertSuccess(result, 'Git Bash shim execution')
+        if (result.output.trim() !== options.version) throw new Error(`Git Bash shim returned ${result.output.trim()}`)
+      } else {
+        console.log('SKIP: Git Bash not found; shim execution not exercised')
+      }
+
+      const shortcut = join(desktopDir, 'dsh.lnk')
+      if (!existsSync(shortcut)) throw new Error('Desktop shortcut was not created')
+      const shortcutQuery = (await invoke('powershell.exe', ['-NoProfile', '-Command', `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${shortcut}'); "$($s.TargetPath)|$($s.Arguments)"`])).stdout.trim()
+      const [shortcutTarget, shortcutArgs] = shortcutQuery.split('|')
+      const actualShortcutTarget = realpathSync.native(shortcutTarget).toLowerCase()
+      const expectedShortcutTarget = realpathSync.native(shim).toLowerCase()
+      if (actualShortcutTarget !== expectedShortcutTarget) throw new Error(`Desktop shortcut targets ${shortcutTarget}; expected ${shim}`)
+      if (shortcutArgs !== 'web') throw new Error(`Desktop shortcut arguments are ${shortcutArgs}; expected "web"`)
+      console.log('PASS: Desktop shortcut targets the launcher with the web argument')
     }
 
     result = await runInstaller(installArgs, env)
@@ -282,6 +313,18 @@ async function main() {
       result = await runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
       assertFailure(result, 'foreign-platform archive', 'win-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
+
+      const noShortcutDesktop = join(temp, 'no-shortcut-desktop')
+      mkdirSync(noShortcutDesktop, { recursive: true })
+      const noShortcutPrefix = join(temp, 'no-shortcut-prefix')
+      result = await runInstaller([
+        versionFlag, options.version, archiveFlag, archive, prefixFlag, noShortcutPrefix,
+        noPathFlag, '-NoDesktopShortcut',
+      ], { ...env, DSH_DESKTOP_DIR: noShortcutDesktop })
+      assertSuccess(result, 'installation with -NoDesktopShortcut')
+      if (existsSync(join(noShortcutDesktop, 'dsh.lnk'))) throw new Error('-NoDesktopShortcut still created a shortcut')
+      if (!existsSync(join(noShortcutPrefix, 'bin', 'dsh'))) throw new Error('-NoDesktopShortcut removed the Git Bash shim')
+      console.log('PASS: -NoDesktopShortcut creates no shortcut but keeps the Git Bash shim')
 
       await exerciseResolution('-ReleasesJsonUrl', '-GitHubProxy', env)
     } else {
