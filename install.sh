@@ -388,3 +388,33 @@ committed=1
 echo "Installed dsh $version"
 echo "Launcher: $shim"
 echo "Runtime: $new_version_dir/runtime/node"
+
+# Hint: older versions remain on disk after an upgrade. Show which ones are still
+# installed and give the user a copy-paste command to remove them. The active version
+# is always excluded, and only safe directory names are considered so the printed
+# command can never target an unexpected path.
+versions_root=$prefix/share/dsh/versions
+old_versions=
+for old_dir in "$versions_root"/*; do
+  [ -d "$old_dir" ] || continue
+  old_name=$(basename -- "$old_dir")
+  if [ "$old_name" = "$version" ]; then continue; fi
+  case "$old_name" in
+    *[!0-9A-Za-z._-]*|'') continue ;;
+  esac
+  if [ -z "$old_versions" ]; then
+    old_versions=$old_name
+  else
+    old_versions="$old_versions $old_name"
+  fi
+done
+if [ -n "$old_versions" ]; then
+  echo
+  echo "提示：本机还保留着以下旧版本 dsh：$old_versions"
+  echo "当前生效版本为 $version。如需清理旧版本，可执行："
+  rm_cmd="rm -rf"
+  for old_name in $old_versions; do
+    rm_cmd="$rm_cmd '$versions_root/$old_name'"
+  done
+  echo "  $rm_cmd"
+fi

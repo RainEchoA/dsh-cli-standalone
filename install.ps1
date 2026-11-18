@@ -366,6 +366,27 @@ try {
             Write-Host "Installed dsh $Version"
             Write-Host "Launcher: $shim"
             Write-Host "Runtime: $(Join-Path $newVersionDir 'runtime\node.exe')"
+
+            # Hint: older versions remain on disk after an upgrade. Show which ones are
+            # still installed and give the user a copy-paste command to remove them. The
+            # active version is always excluded, and only safe directory names are
+            # considered so the printed command can never target an unexpected path.
+            $versionsRoot = Join-Path $Prefix 'versions'
+            $oldVersions = @()
+            if (Test-Path -LiteralPath $versionsRoot) {
+                foreach ($entry in Get-ChildItem -LiteralPath $versionsRoot -Directory) {
+                    if ($entry.Name -eq $Version) { continue }
+                    if ($entry.Name -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') { continue }
+                    $oldVersions += $entry.Name
+                }
+            }
+            if ($oldVersions.Count -gt 0) {
+                $quoted = @($oldVersions | ForEach-Object { "'" + (Join-Path $versionsRoot $_).Replace("'", "''") + "'" })
+                Write-Host ''
+                Write-Host "提示：本机还保留着以下旧版本 dsh：$($oldVersions -join ', ')"
+                Write-Host "当前生效版本为 $Version。如需清理旧版本，可执行："
+                Write-Host "  Remove-Item -Recurse -Force $($quoted -join ', ')"
+            }
         } finally {
             if (-not $committed -and $moved -and $newVersionDir -and (Test-Path -LiteralPath $newVersionDir)) {
                 Remove-Item -LiteralPath $newVersionDir -Recurse -Force -ErrorAction SilentlyContinue
