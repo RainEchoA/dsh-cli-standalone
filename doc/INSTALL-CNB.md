@@ -47,6 +47,8 @@ curl -fsSL https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.
 - `DSH_PREFIX`：安装前缀，默认 `$HOME/.local`（可执行文件落在 `$HOME/.local/bin/dsh`，版本目录在 `$HOME/.local/share/dsh/versions/<版本>`）。
 - `DSH_RELEASES_JSON_URL`：版本索引 JSON 地址，默认 GitHub Pages 的 `releases.json`；**该地址不会被代理改写**，镜像场景可指向任何可达副本（例如自行托管在 CNB 仓库里的同步副本）。
 - `DSH_GH_PROXY`：GitHub 加速代理（仅在仍走 GitHub 下载时有意义；CNB 等自定义镜像地址不会被代理改写）。
+- `DSH_NO_SHORTCUT`：**仅 Windows**。非空时跳过创建桌面/开始菜单快捷方式。
+- `DSH_SHORTCUT_DIR`：**仅 Windows**。指定两个快捷方式的写入目录；缺省分别使用桌面与开始菜单「程序」文件夹。
 
 ## 3. 安装（Windows PowerShell）
 
@@ -58,6 +60,15 @@ irm https://cnb.cool/aixx.work/dsh-cli-standalone/-/git/raw/main/install.ps1 | i
 
 安装位置默认 `%LOCALAPPDATA%\Programs\dsh`（可用 `DSH_PREFIX` 覆盖），
 `DSH_NO_MODIFY_PATH` 非空时不修改用户 PATH。
+
+安装完成后默认在**桌面**与**开始菜单「程序」**各创建一个 `dsh Web.lnk`，
+通过 `cmd /K` 启动 `dsh web` 并保留命令行窗口。快捷方式指向已激活的 `bin\dsh.cmd`，升级后仍然有效。
+
+不需要快捷方式时，可设置 `DSH_NO_SHORTCUT=1`（适用于 `irm | iex`）或在 `-File` 调用时传 `-NoShortcut`。
+自定义部署、自动化测试等场景可用 `DSH_SHORTCUT_DIR` / `-ShortcutDir` 指定目录，此时两个 `.lnk` 都写入该目录，
+文件名分别为 `dsh Web (Desktop).lnk` 与 `dsh Web (Start Menu).lnk`。
+
+安装成功后如发现其它旧版本目录，安装器会列出旧版本并打印清理命令，但不会自动删除。
 
 ## 4. 手动下载与校验
 

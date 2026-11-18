@@ -17,8 +17,9 @@
 #   DSH_RELEASES_JSON_URL Release index JSON used for version resolution
 #   DSH_GH_PROXY         GitHub acceleration proxy (e.g. https://api.gitproxy.dev)
 #   DSH_NO_MODIFY_PATH   Non-empty: skip the user PATH update
-#   DSH_NO_DESKTOP_SHORTCUT Non-empty: do not create the Desktop shortcut
-#   DSH_DESKTOP_DIR      Where to place the Desktop shortcut (default: the user Desktop folder)
+#   DSH_NO_SHORTCUT      Non-empty: skip the Desktop and Start Menu shortcuts
+#   DSH_SHORTCUT_DIR     Where to place both shortcuts (default: Desktop and Programs)
+#   DSH_NO_DESKTOP_SHORTCUT / DSH_DESKTOP_DIR are accepted aliases.
 
 $dshOuterErrorAction = $ErrorActionPreference
 $dshOuterTls = [Net.ServicePointManager]::SecurityProtocol
@@ -37,18 +38,20 @@ try {
         for ($index = 0; $index -lt $tokens.Count; $index++) {
             $token = [string]$tokens[$index]
             switch -Regex ($token) {
-                '^(?i)-(NoModifyPath|NoDesktopShortcut)$' { $cli[$Matches[1]] = $true }
-                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesJsonUrl|GitHubProxy|DesktopDir)$' {
+                '^(?i)-NoModifyPath$' { $cli['NoModifyPath'] = $true }
+                '^(?i)-(NoShortcut|NoDesktopShortcut)$' { $cli['NoShortcut'] = $true }
+                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesJsonUrl|GitHubProxy|ShortcutDir|DesktopDir)$' {
                     $index++
                     if ($index -ge $tokens.Count) { throw "$token requires a value" }
-                    $cli[$Matches[1]] = [string]$tokens[$index]
+                    $name = if ($Matches[1] -ieq 'DesktopDir') { 'ShortcutDir' } else { $Matches[1] }
+                    $cli[$name] = [string]$tokens[$index]
                 }
                 default { throw "Unknown argument: $token" }
             }
         }
     }
     if ($env:DSH_NO_MODIFY_PATH) { $cli['NoModifyPath'] = $true }
-    if ($env:DSH_NO_DESKTOP_SHORTCUT) { $cli['NoDesktopShortcut'] = $true }
+    if ($env:DSH_NO_SHORTCUT -or $env:DSH_NO_DESKTOP_SHORTCUT) { $cli['NoShortcut'] = $true }
 
     & {
         param(
@@ -59,9 +62,9 @@ try {
             [string]$BaseUrl = $(if ($env:DSH_BASE_URL) { $env:DSH_BASE_URL } else { 'https://github.com/RainEchoA/dsh-cli-standalone/releases/download' }),
             [string]$ReleasesJsonUrl = $(if ($env:DSH_RELEASES_JSON_URL) { $env:DSH_RELEASES_JSON_URL } else { 'https://rainechoa.github.io/dsh-cli-standalone/releases.json' }),
             [string]$GitHubProxy = $env:DSH_GH_PROXY,
-            [string]$DesktopDir = $env:DSH_DESKTOP_DIR,
+            [string]$ShortcutDir = $(if ($env:DSH_SHORTCUT_DIR) { $env:DSH_SHORTCUT_DIR } else { $env:DSH_DESKTOP_DIR }),
             [switch]$NoModifyPath,
-            [switch]$NoDesktopShortcut
+            [switch]$NoShortcut
         )
 
         # A pwsh (PowerShell 7) parent exports a PSModulePath that lists PowerShell 7 module
@@ -244,11 +247,30 @@ try {
             return ($output | Out-String).Trim()
         }
 
+        function New-DshShortcut([string]$Path, [string]$Shim) {
+            $shell = New-Object -ComObject WScript.Shell
+            $link = $shell.CreateShortcut($Path)
+            $link.TargetPath = $env:ComSpec
+            $link.Arguments = ('/K ""{0}" web"' -f $Shim)
+            $link.WorkingDirectory = [Environment]::GetFolderPath('UserProfile')
+            $link.IconLocation = "$env:ComSpec,0"
+            $link.Description = 'DeepSeek Harness dsh (Web GUI)'
+            $link.Save()
+        }
+
+        if (-not $NoShortcut -and $ShortcutDir) {
+            New-Item -ItemType Directory -Force -Path $ShortcutDir | Out-Null
+            $ShortcutDir = (Resolve-Path -LiteralPath $ShortcutDir).Path
+        }
+
         $work = Join-Path $env:TEMP "dsh-install-$([Guid]::NewGuid().ToString('N'))"
         $newVersionDir = $null
         $moved = $false
         $committed = $false
         $oldShim = $null
+        $oldShShim = $null
+        $shim = $null
+        $shShim = $null
         try {
             New-Item -ItemType Directory -Path $work | Out-Null
             $filename = "dsh-v$Version-win-x64.zip"
@@ -360,19 +382,17 @@ try {
             }
 
             Move-Item -LiteralPath $newShim -Destination $shim -Force
-            try {
-                $activated = Invoke-Dsh $shim @('--version')
-                if ($activated -ne $Version) { throw "Activated shim returned $activated; expected $Version" }
-            } catch {
-                if ($oldShim) { Copy-Item -LiteralPath $oldShim -Destination $shim -Force }
-                else { Remove-Item -LiteralPath $shim -Force -ErrorAction SilentlyContinue }
-                throw
-            }
+            $activated = Invoke-Dsh $shim @('--version')
+            if ($activated -ne $Version) { throw "Activated shim returned $activated; expected $Version" }
 
             # Git Bash / MSYS2 has no PATHEXT lookup, so typing "dsh" there finds no dsh.cmd.
             # Install an extensionless shell shim next to it that forwards to dsh.cmd; the
             # //c spelling keeps MSYS2 from rewriting the /c flag into a drive letter.
             $shShim = Join-Path $binDir 'dsh'
+            if (Test-Path -LiteralPath $shShim -PathType Leaf) {
+                $oldShShim = Join-Path $work 'previous-dsh.sh'
+                Copy-Item -LiteralPath $shShim -Destination $oldShShim -Force
+            }
             $shShimLines = @(
                 '#!/bin/sh',
                 '# Git Bash shim for dsh: forwards to dsh.cmd next to this file.',
@@ -381,32 +401,31 @@ try {
             )
             [IO.File]::WriteAllText($shShim, ($shShimLines -join "`n") + "`n", (New-Object System.Text.ASCIIEncoding))
 
-            # Optional Desktop shortcut that launches "dsh web" (the Web GUI entry point).
-            if ($NoDesktopShortcut) {
-                Write-Host 'Desktop shortcut creation disabled'
+            if ($NoShortcut) {
+                Write-Host 'Shortcuts were not created (-NoShortcut)'
             } else {
-                $desktopTarget = $DesktopDir
-                if (-not $desktopTarget) { $desktopTarget = [Environment]::GetFolderPath('Desktop') }
-                if ($DesktopDir -and -not (Test-Path -LiteralPath $desktopTarget)) {
-                    throw "Desktop directory does not exist: $DesktopDir"
-                }
-                if (-not (Test-Path -LiteralPath $desktopTarget)) {
-                    Write-Warning 'No Desktop folder was found; skipping the Desktop shortcut'
-                } else {
-                    try {
-                        $shortcutPath = Join-Path $desktopTarget 'dsh.lnk'
-                        $wshShell = New-Object -ComObject WScript.Shell
-                        $shortcut = $wshShell.CreateShortcut($shortcutPath)
-                        $shortcut.TargetPath = $shim
-                        $shortcut.Arguments = 'web'
-                        $shortcut.WorkingDirectory = [Environment]::GetFolderPath('UserProfile')
-                        $shortcut.IconLocation = "$(Join-Path $newVersionDir 'runtime\node.exe'),0"
-                        $shortcut.Description = 'DeepSeek Harness dsh (Web GUI)'
-                        $shortcut.Save()
-                        Write-Host "Desktop shortcut: $shortcutPath"
-                    } catch {
-                        Write-Warning "Desktop shortcut could not be created: $($_.Exception.Message)"
+                try {
+                    if ($ShortcutDir) {
+                        $shortcutPaths = @(
+                            (Join-Path $ShortcutDir 'dsh Web (Desktop).lnk'),
+                            (Join-Path $ShortcutDir 'dsh Web (Start Menu).lnk')
+                        )
+                    } else {
+                        $shortcutPaths = @()
+                        foreach ($shortcutFolder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
+                            if ($shortcutFolder -and (Test-Path -LiteralPath $shortcutFolder -PathType Container)) {
+                                $shortcutPaths += Join-Path $shortcutFolder 'dsh Web.lnk'
+                            } else {
+                                Write-Warning 'A Desktop or Start Menu folder was not found; its shortcut will be skipped'
+                            }
+                        }
                     }
+                    foreach ($shortcutPath in $shortcutPaths) {
+                        New-DshShortcut $shortcutPath $shim
+                        Write-Host "Shortcut: $shortcutPath"
+                    }
+                } catch {
+                    Write-Warning "Could not create shortcuts: $($_.Exception.Message)"
                 }
             }
             $committed = $true
@@ -419,25 +438,42 @@ try {
             # still installed and give the user a copy-paste command to remove them. The
             # active version is always excluded, and only safe directory names are
             # considered so the printed command can never target an unexpected path.
-            $versionsRoot = Join-Path $Prefix 'versions'
-            $oldVersions = @()
-            if (Test-Path -LiteralPath $versionsRoot) {
-                foreach ($entry in Get-ChildItem -LiteralPath $versionsRoot -Directory) {
-                    if ($entry.Name -eq $Version) { continue }
-                    if ($entry.Name -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') { continue }
-                    $oldVersions += $entry.Name
+            try {
+                $versionsRoot = Join-Path $Prefix 'versions'
+                $oldVersions = @()
+                if (Test-Path -LiteralPath $versionsRoot) {
+                    foreach ($entry in Get-ChildItem -LiteralPath $versionsRoot -Directory) {
+                        if ($entry.Name -eq $Version) { continue }
+                        if ($entry.Name -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') { continue }
+                        $oldVersions += $entry.Name
+                    }
                 }
-            }
-            if ($oldVersions.Count -gt 0) {
-                $quoted = @($oldVersions | ForEach-Object { "'" + (Join-Path $versionsRoot $_).Replace("'", "''") + "'" })
-                Write-Host ''
-                Write-Host "提示：本机还保留着以下旧版本 dsh：$($oldVersions -join ', ')"
-                Write-Host "当前生效版本为 $Version。如需清理旧版本，可执行："
-                Write-Host "  Remove-Item -Recurse -Force $($quoted -join ', ')"
+                if ($oldVersions.Count -gt 0) {
+                    $quoted = @($oldVersions | ForEach-Object { "'" + (Join-Path $versionsRoot $_).Replace("'", "''") + "'" })
+                    Write-Host ''
+                    Write-Host "提示：本机还保留着以下旧版本 dsh：$($oldVersions -join ', ')"
+                    Write-Host "当前生效版本为 $Version。如需清理旧版本，可执行："
+                    Write-Host "  Remove-Item -LiteralPath $($quoted -join ', ') -Recurse -Force"
+                }
+            } catch {
+                Write-Warning "Could not enumerate old versions: $($_.Exception.Message)"
             }
         } finally {
-            if (-not $committed -and $moved -and $newVersionDir -and (Test-Path -LiteralPath $newVersionDir)) {
-                Remove-Item -LiteralPath $newVersionDir -Recurse -Force -ErrorAction SilentlyContinue
+            if (-not $committed) {
+                if ($oldShim) {
+                    try { Copy-Item -LiteralPath $oldShim -Destination $shim -Force -ErrorAction Stop }
+                    catch { Write-Warning "Could not restore the previous CMD shim: $($_.Exception.Message)" }
+                } elseif ($shim) { Remove-Item -LiteralPath $shim -Force -ErrorAction SilentlyContinue }
+                if ($oldShShim) {
+                    try { Copy-Item -LiteralPath $oldShShim -Destination $shShim -Force -ErrorAction Stop }
+                    catch { Write-Warning "Could not restore the previous Git Bash shim: $($_.Exception.Message)" }
+                }
+                elseif ($shShim -and (Test-Path -LiteralPath $shShim -PathType Leaf)) {
+                    Remove-Item -LiteralPath $shShim -Force -ErrorAction SilentlyContinue
+                }
+                if ($moved -and $newVersionDir -and (Test-Path -LiteralPath $newVersionDir)) {
+                    Remove-Item -LiteralPath $newVersionDir -Recurse -Force -ErrorAction SilentlyContinue
+                }
             }
             Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
         }

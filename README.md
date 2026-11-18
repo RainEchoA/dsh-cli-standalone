@@ -73,8 +73,8 @@ irm https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/install.
 - `DSH_NO_MODIFY_PATH`：非空时禁止修改用户 PATH。
 - `DSH_BASE_URL`／`DSH_RELEASES_JSON_URL`：release 下载／版本索引 JSON 的地址（镜像、气隙环境）。版本索引默认值是每次 Release 后刷新的 GitHub Pages 静态 JSON，不依赖 GitHub API。
 - `DSH_GH_PROXY`：GitHub 加速代理（如 `https://api.gitproxy.dev`）；把默认 GitHub 地址（安装脚本、版本 API、release 下载）重写为 `<代理>/<原 URL>`，显式指定的 URL 参数不被重写。
-- `DSH_NO_DESKTOP_SHORTCUT`：非空时不创建桌面快捷方式（`-NoDesktopShortcut` 等价）。
-- `DSH_DESKTOP_DIR`：桌面快捷方式的输出目录，默认取系统用户桌面文件夹。
+- `DSH_NO_SHORTCUT`：非空时不创建桌面和开始菜单快捷方式（`-NoShortcut` 等价；兼容 `DSH_NO_DESKTOP_SHORTCUT`／`-NoDesktopShortcut`）。
+- `DSH_SHORTCUT_DIR`：两个快捷方式的输出目录，默认分别取系统桌面和开始菜单「程序」文件夹（兼容 `DSH_DESKTOP_DIR`／`-DesktopDir`）。
 
 版本解析读取 GitHub Pages 的静态 JSON（`rainechoa.github.io`），下载走 `--base-url`；两者都需可达，气隙环境可把上述地址指向镜像。GitHub 直连受限时可用加速代理（外层 `irm` 的 URL 需自行加代理前缀；版本索引地址不会被代理改写，镜像场景可直接把 `DSH_RELEASES_JSON_URL` 指向可达的 JSON 副本）：
 
@@ -134,15 +134,17 @@ curl -fsSL https://raw.githubusercontent.com/RainEchoA/dsh-cli-standalone/main/i
   -Archive .\dsh-v0.2.2-rc.1-win-x64.zip
 ```
 
-Linux 默认安装到 `~/.local/share/dsh/versions/<version>`，shim 为 `~/.local/bin/dsh`，必要时更新 `~/.profile`。Windows 默认安装到 `%LOCALAPPDATA%\Programs\dsh`，shim 位于其 `bin\dsh.cmd`，必要时更新用户 PATH；Windows 安装还会生成 Git Bash 可直接调用的无扩展名 shim（`bin\dsh`，bash 不做 PATHEXT 扩展）和桌面快捷方式 `dsh.lnk`（双击启动 `dsh web`），后者可用 `-NoDesktopShortcut`／`DSH_NO_DESKTOP_SHORTCUT` 关闭、用 `-DesktopDir`／`DSH_DESKTOP_DIR` 改放其它目录。
+Linux 默认安装到 `~/.local/share/dsh/versions/<version>`，shim 为 `~/.local/bin/dsh`，必要时更新 `~/.profile`。Windows 默认安装到 `%LOCALAPPDATA%\Programs\dsh`，shim 位于其 `bin\dsh.cmd`，必要时更新用户 PATH；还会生成 Git Bash 可直接调用的无扩展名 shim（`bin\dsh`，bash 不做 PATHEXT 扩展）。
 
-使用 `--prefix`／`-Prefix` 可改变安装位置；`--no-modify-path`／`-NoModifyPath` 禁止修改 PATH 配置，并在输出中给出手工配置路径。已存在的同版本目录不会被覆盖。
+Windows 默认在桌面和开始菜单「程序」文件夹各创建 `dsh Web.lnk`，通过 `cmd /K` 启动 `dsh web` 并保留命令行窗口。`-NoShortcut`／`DSH_NO_SHORTCUT` 可全部关闭；`-ShortcutDir`／`DSH_SHORTCUT_DIR` 可把两项都写入指定目录，此时文件名分别为 `dsh Web (Desktop).lnk` 和 `dsh Web (Start Menu).lnk`。
+
+使用 `--prefix`／`-Prefix` 可改变安装位置；`--no-modify-path`／`-NoModifyPath` 禁止修改 PATH 配置，并在输出中给出手工配置路径。已存在的同版本目录不会被覆盖。安装成功后如发现其它旧版本目录，安装器会列出旧版本并打印清理命令，但不会自动删除。
 
 ## 卸载
 
 安装器不写注册表、不装系统服务，卸载即删除其产物（用了 `--prefix`／`-Prefix` 时按实际位置替换路径）：
 
-- Windows：删除 `%LOCALAPPDATA%\Programs\dsh` 目录；从用户 PATH 移除 `...\Programs\dsh\bin` 条目（系统属性 → 环境变量，或参考上文命令）；删除桌面 `dsh.lnk`。
+- Windows：删除 `%LOCALAPPDATA%\Programs\dsh` 目录；从用户 PATH 移除 `...\Programs\dsh\bin` 条目（系统属性 → 环境变量，或参考上文命令）；删除桌面和开始菜单「程序」文件夹中的 `dsh Web.lnk`。
 - Linux：删除 `~/.local/share/dsh` 和 `~/.local/bin/dsh`；打开 `~/.profile` 删除 `# dsh-cli-standalone user PATH` 注释行及其下一行 `export PATH=...`。
 
 ## 安装器回归测试
@@ -153,7 +155,7 @@ node tests/installer-regression.mjs \
   --version 0.2.2-rc.1
 ```
 
-覆盖：缺少校验和、归档被篡改、归档与版本不匹配、路径含空格的有效安装、shim 执行、重复版本拒绝且不删除旧目录、篡改后重装保持旧启动器可用、Linux PATH 写入／Windows 禁止 PATH 修改，以及 Git Bash shim 内容与执行、桌面快捷方式生成与 `-NoDesktopShortcut` 反向用例。
+覆盖：缺少校验和、归档被篡改、归档与版本不匹配、路径含空格的有效安装、shim 执行、重复版本拒绝且不删除旧目录、篡改后重装保持旧启动器可用、Linux PATH 写入／Windows 禁止 PATH 修改、旧版本清理提示，以及 Git Bash shim、桌面／开始菜单快捷方式、`-NoShortcut` 和激活后失败回滚。
 
 ## GitHub Actions
 

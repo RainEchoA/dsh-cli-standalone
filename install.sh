@@ -412,7 +412,7 @@ if [ -n "$old_versions" ]; then
   echo
   echo "提示：本机还保留着以下旧版本 dsh：$old_versions"
   echo "当前生效版本为 $version。如需清理旧版本，可执行："
-  rm_cmd="rm -rf"
+  rm_cmd="rm -rf --"
   for old_name in $old_versions; do
     rm_cmd="$rm_cmd '$versions_root/$old_name'"
   done
