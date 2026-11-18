@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -76,6 +76,16 @@ async function main() {
   const prefixFlag = platform === 'win' ? '-Prefix' : '--prefix'
   const checksumFlag = platform === 'win' ? '-Checksum' : '--checksum'
   const noPathFlag = platform === 'win' ? '-NoModifyPath' : '--no-modify-path'
+  const noShortcutFlag = '-NoShortcut'
+  const shortcutDirFlag = '-ShortcutDir'
+  const readShortcut = async (lnkPath) => {
+    const quoted = lnkPath.replace(/'/g, "''")
+    const script = `$l = (New-Object -ComObject WScript.Shell).CreateShortcut('${quoted}'); "$($l.TargetPath)|$($l.Arguments)"`
+    const run = await invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
+    if (run.status !== 0) throw new Error(`Could not read shortcut ${lnkPath}\n${run.output}`)
+    const [targetPath, arguments_] = run.stdout.trim().split('|')
+    return { targetPath, arguments: arguments_ }
+  }
   const runInstaller = async (installerArgs, env = process.env) => {
     const [command, commandArgs] = installerInvocation(root, platform, installerArgs)
     return invoke(command, commandArgs, { env })
@@ -179,7 +189,10 @@ async function main() {
     mkdirSync(isolated, { recursive: true })
     copyFileSync(archive, isolatedArchive)
     const noChecksumPrefix = join(temp, 'no-checksum-prefix')
-    let result = await runInstaller([versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, noChecksumPrefix, noPathFlag])
+    let result = await runInstaller([
+      versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, noChecksumPrefix, noPathFlag,
+      ...(platform === 'win' ? [noShortcutFlag] : []),
+    ])
     assertSuccess(result, 'local archive without a checksum installs with verification skipped')
     if (!result.output.toLowerCase().includes('skipping')) {
       throw new Error(`Checksum skip was not reported\n${result.output}`)
@@ -207,12 +220,17 @@ async function main() {
     const installPrefix = join(temp, 'install prefix with spaces')
     const home = join(temp, 'home')
     mkdirSync(home, { recursive: true })
-    const desktopDir = join(home, 'Desktop')
-    mkdirSync(desktopDir, { recursive: true })
+    const shortcutDir = join(home, 'Desktop')
+    mkdirSync(shortcutDir, { recursive: true })
+    const oldVersion = '0.0.1'
+    const oldVersionDir = platform === 'win'
+      ? join(installPrefix, 'versions', oldVersion)
+      : join(installPrefix, 'share', 'dsh', 'versions', oldVersion)
+    mkdirSync(oldVersionDir, { recursive: true })
     const installArgs = [versionFlag, options.version, archiveFlag, archive, prefixFlag, installPrefix]
     let userPathBefore
     if (platform === 'win') {
-      installArgs.push(noPathFlag)
+      installArgs.push(noPathFlag, shortcutDirFlag, shortcutDir)
       userPathBefore = (await invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"])).stdout.trim()
     }
     // The CI workflow exports DSH_VERSION at job level; scrub DSH_* so the installers
@@ -221,9 +239,13 @@ async function main() {
     for (const key of Object.keys(scrubbed)) {
       if (key.startsWith('DSH_')) delete scrubbed[key]
     }
-    const env = { ...scrubbed, HOME: home, DSH_HOME: join(home, '.dsh'), DSH_DESKTOP_DIR: desktopDir }
+    const env = { ...scrubbed, HOME: home, DSH_HOME: join(home, '.dsh'), DSH_SHORTCUT_DIR: shortcutDir }
     result = await runInstaller(installArgs, env)
     assertSuccess(result, 'valid local archive installation')
+    if (!result.output.includes(oldVersion) || !result.output.includes(platform === 'win' ? 'Remove-Item -LiteralPath' : 'rm -rf --')) {
+      throw new Error(`Old-version cleanup hint was not reported\n${result.output}`)
+    }
+    console.log('PASS: old-version cleanup hint excludes the active version and prints a removal command')
 
     const shim = platform === 'win'
       ? join(installPrefix, 'bin', 'dsh.cmd')
@@ -261,15 +283,15 @@ async function main() {
         console.log('SKIP: Git Bash not found; shim execution not exercised')
       }
 
-      const shortcut = join(desktopDir, 'dsh.lnk')
-      if (!existsSync(shortcut)) throw new Error('Desktop shortcut was not created')
-      const shortcutQuery = (await invoke('powershell.exe', ['-NoProfile', '-Command', `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${shortcut}'); "$($s.TargetPath)|$($s.Arguments)"`])).stdout.trim()
-      const [shortcutTarget, shortcutArgs] = shortcutQuery.split('|')
-      const actualShortcutTarget = realpathSync.native(shortcutTarget).toLowerCase()
-      const expectedShortcutTarget = realpathSync.native(shim).toLowerCase()
-      if (actualShortcutTarget !== expectedShortcutTarget) throw new Error(`Desktop shortcut targets ${shortcutTarget}; expected ${shim}`)
-      if (shortcutArgs !== 'web') throw new Error(`Desktop shortcut arguments are ${shortcutArgs}; expected "web"`)
-      console.log('PASS: Desktop shortcut targets the launcher with the web argument')
+      const expectedShortcutTarget = realpathSync.native(env.ComSpec).toLowerCase()
+      for (const name of ['dsh Web (Desktop).lnk', 'dsh Web (Start Menu).lnk']) {
+        const shortcutPath = join(shortcutDir, name)
+        const shortcut = await readShortcut(shortcutPath)
+        const actualShortcutTarget = realpathSync.native(shortcut.targetPath).toLowerCase()
+        if (actualShortcutTarget !== expectedShortcutTarget) throw new Error(`${name} targets ${shortcut.targetPath}; expected ${env.ComSpec}`)
+        if (shortcut.arguments !== `/K ""${shim}" web"`) throw new Error(`${name} arguments are ${shortcut.arguments}; expected the stable shim with web`)
+      }
+      console.log('PASS: Desktop and Start Menu shortcuts launch the stable shim through cmd /K')
     }
 
     result = await runInstaller(installArgs, env)
@@ -314,17 +336,44 @@ async function main() {
       assertFailure(result, 'foreign-platform archive', 'win-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 
-      const noShortcutDesktop = join(temp, 'no-shortcut-desktop')
-      mkdirSync(noShortcutDesktop, { recursive: true })
+      const noShortcutDir = join(temp, 'no-shortcut-dir')
+      mkdirSync(noShortcutDir, { recursive: true })
       const noShortcutPrefix = join(temp, 'no-shortcut-prefix')
       result = await runInstaller([
         versionFlag, options.version, archiveFlag, archive, prefixFlag, noShortcutPrefix,
-        noPathFlag, '-NoDesktopShortcut',
-      ], { ...env, DSH_DESKTOP_DIR: noShortcutDesktop })
-      assertSuccess(result, 'installation with -NoDesktopShortcut')
-      if (existsSync(join(noShortcutDesktop, 'dsh.lnk'))) throw new Error('-NoDesktopShortcut still created a shortcut')
-      if (!existsSync(join(noShortcutPrefix, 'bin', 'dsh'))) throw new Error('-NoDesktopShortcut removed the Git Bash shim')
-      console.log('PASS: -NoDesktopShortcut creates no shortcut but keeps the Git Bash shim')
+        noPathFlag, noShortcutFlag,
+      ], { ...env, DSH_SHORTCUT_DIR: noShortcutDir })
+      assertSuccess(result, 'installation with -NoShortcut')
+      if (readdirSync(noShortcutDir).some((name) => name.endsWith('.lnk'))) throw new Error('-NoShortcut still created a shortcut')
+      if (!existsSync(join(noShortcutPrefix, 'bin', 'dsh'))) throw new Error('-NoShortcut removed the Git Bash shim')
+      console.log('PASS: -NoShortcut creates no shortcuts but keeps the Git Bash shim')
+
+      const rollbackPrefix = join(temp, 'rollback-prefix')
+      const rollbackBin = join(rollbackPrefix, 'bin')
+      const rollbackLauncher = join(rollbackPrefix, 'versions', oldVersion, 'bin', 'dsh.cmd')
+      mkdirSync(dirname(rollbackLauncher), { recursive: true })
+      mkdirSync(rollbackBin, { recursive: true })
+      writeFileSync(rollbackLauncher, `@echo off\r\nif /i "%~1"=="--version" (echo ${oldVersion}&exit /b 0)\r\nexit /b 0\r\n`)
+      const rollbackShim = join(rollbackBin, 'dsh.cmd')
+      const oldShimContent = `@echo off\r\nsetlocal\r\nset "ROOT=%~dp0.."\r\ncall "%ROOT%\\versions\\${oldVersion}\\bin\\dsh.cmd" %*\r\nexit /b %ERRORLEVEL%\r\n`
+      writeFileSync(rollbackShim, oldShimContent)
+      const rollbackShShim = join(rollbackBin, 'dsh')
+      const oldShShimContent = '#!/bin/sh\n# previous Git Bash shim\n'
+      writeFileSync(rollbackShShim, oldShShimContent)
+      chmodSync(rollbackShShim, 0o444)
+      result = await runInstaller([
+        versionFlag, options.version, archiveFlag, archive, prefixFlag, rollbackPrefix,
+        noPathFlag, noShortcutFlag,
+      ], env)
+      assertFailure(result, 'post-activation failure during upgrade')
+      if (existsSync(join(rollbackPrefix, 'versions', options.version))) throw new Error('Failed upgrade left the new version directory behind')
+      if (readFileSync(rollbackShim, 'utf8') !== oldShimContent) throw new Error('Failed upgrade did not restore the previous CMD shim')
+      if (readFileSync(rollbackShShim, 'utf8') !== oldShShimContent) throw new Error('Failed upgrade did not restore the previous Git Bash shim')
+      result = await invoke(rollbackShim, ['--version'], { env })
+      assertSuccess(result, 'previous installation remains executable after post-activation failure')
+      if (result.output.trim() !== oldVersion) throw new Error(`Rolled-back shim returned ${result.output.trim()}; expected ${oldVersion}`)
+      chmodSync(rollbackShShim, 0o644)
+      console.log('PASS: post-activation rollback restores both shims and removes the new version')
 
       await exerciseResolution('-ReleasesJsonUrl', '-GitHubProxy', env)
     } else {
