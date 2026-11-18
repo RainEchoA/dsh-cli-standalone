@@ -2,7 +2,8 @@ name: daily-version-scan
 
 on:
   schedule:
-    - cron: '0 13 * * *' # 每天 21:00（北京时间）
+    - cron: '0 21 * * *' # 每天 21:00（Asia/Shanghai，含夏令时处理）
+      timezone: 'Asia/Shanghai'
   workflow_dispatch:
 
 permissions:

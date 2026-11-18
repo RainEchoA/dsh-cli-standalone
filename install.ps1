@@ -17,10 +17,13 @@
 #   DSH_RELEASES_JSON_URL Release index JSON used for version resolution
 #   DSH_GH_PROXY         GitHub acceleration proxy (e.g. https://api.gitproxy.dev)
 #   DSH_NO_MODIFY_PATH   Non-empty: skip the user PATH update
+#   DSH_NO_DESKTOP_SHORTCUT Non-empty: do not create the Desktop shortcut
+#   DSH_DESKTOP_DIR      Where to place the Desktop shortcut (default: the user Desktop folder)
 
 $dshOuterErrorAction = $ErrorActionPreference
 $dshOuterTls = [Net.ServicePointManager]::SecurityProtocol
 $dshOuterModulePath = $env:PSModulePath
+$dshFileInvocation = $MyInvocation.MyCommand.CommandType -eq 'ExternalScript'
 try {
     $ErrorActionPreference = 'Stop'
     # PowerShell 5.1 on older Windows may not negotiate TLS 1.2 by default.
@@ -29,13 +32,13 @@ try {
     # Collect -File / .\install.ps1 arguments. Under `irm|iex` the command type is not
     # ExternalScript and $args is left untouched, so only environment variables apply.
     $cli = @{}
-    if ($MyInvocation.MyCommand.CommandType -eq 'ExternalScript') {
+    if ($dshFileInvocation) {
         $tokens = @($args)
         for ($index = 0; $index -lt $tokens.Count; $index++) {
             $token = [string]$tokens[$index]
             switch -Regex ($token) {
-                '^(?i)-NoModifyPath$' { $cli['NoModifyPath'] = $true }
-                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesJsonUrl|GitHubProxy)$' {
+                '^(?i)-(NoModifyPath|NoDesktopShortcut)$' { $cli[$Matches[1]] = $true }
+                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesJsonUrl|GitHubProxy|DesktopDir)$' {
                     $index++
                     if ($index -ge $tokens.Count) { throw "$token requires a value" }
                     $cli[$Matches[1]] = [string]$tokens[$index]
@@ -45,6 +48,7 @@ try {
         }
     }
     if ($env:DSH_NO_MODIFY_PATH) { $cli['NoModifyPath'] = $true }
+    if ($env:DSH_NO_DESKTOP_SHORTCUT) { $cli['NoDesktopShortcut'] = $true }
 
     & {
         param(
@@ -55,7 +59,9 @@ try {
             [string]$BaseUrl = $(if ($env:DSH_BASE_URL) { $env:DSH_BASE_URL } else { 'https://github.com/RainEchoA/dsh-cli-standalone/releases/download' }),
             [string]$ReleasesJsonUrl = $(if ($env:DSH_RELEASES_JSON_URL) { $env:DSH_RELEASES_JSON_URL } else { 'https://rainechoa.github.io/dsh-cli-standalone/releases.json' }),
             [string]$GitHubProxy = $env:DSH_GH_PROXY,
-            [switch]$NoModifyPath
+            [string]$DesktopDir = $env:DSH_DESKTOP_DIR,
+            [switch]$NoModifyPath,
+            [switch]$NoDesktopShortcut
         )
 
         # A pwsh (PowerShell 7) parent exports a PSModulePath that lists PowerShell 7 module
@@ -362,9 +368,51 @@ try {
                 else { Remove-Item -LiteralPath $shim -Force -ErrorAction SilentlyContinue }
                 throw
             }
+
+            # Git Bash / MSYS2 has no PATHEXT lookup, so typing "dsh" there finds no dsh.cmd.
+            # Install an extensionless shell shim next to it that forwards to dsh.cmd; the
+            # //c spelling keeps MSYS2 from rewriting the /c flag into a drive letter.
+            $shShim = Join-Path $binDir 'dsh'
+            $shShimLines = @(
+                '#!/bin/sh',
+                '# Git Bash shim for dsh: forwards to dsh.cmd next to this file.',
+                'DIR="$(cd "$(dirname "$0")" && pwd)"',
+                'exec cmd //c "$(cygpath -w "$DIR/dsh.cmd")" "$@"'
+            )
+            [IO.File]::WriteAllText($shShim, ($shShimLines -join "`n") + "`n", (New-Object System.Text.ASCIIEncoding))
+
+            # Optional Desktop shortcut that launches "dsh web" (the Web GUI entry point).
+            if ($NoDesktopShortcut) {
+                Write-Host 'Desktop shortcut creation disabled'
+            } else {
+                $desktopTarget = $DesktopDir
+                if (-not $desktopTarget) { $desktopTarget = [Environment]::GetFolderPath('Desktop') }
+                if ($DesktopDir -and -not (Test-Path -LiteralPath $desktopTarget)) {
+                    throw "Desktop directory does not exist: $DesktopDir"
+                }
+                if (-not (Test-Path -LiteralPath $desktopTarget)) {
+                    Write-Warning 'No Desktop folder was found; skipping the Desktop shortcut'
+                } else {
+                    try {
+                        $shortcutPath = Join-Path $desktopTarget 'dsh.lnk'
+                        $wshShell = New-Object -ComObject WScript.Shell
+                        $shortcut = $wshShell.CreateShortcut($shortcutPath)
+                        $shortcut.TargetPath = $shim
+                        $shortcut.Arguments = 'web'
+                        $shortcut.WorkingDirectory = [Environment]::GetFolderPath('UserProfile')
+                        $shortcut.IconLocation = "$(Join-Path $newVersionDir 'runtime\node.exe'),0"
+                        $shortcut.Description = 'DeepSeek Harness dsh (Web GUI)'
+                        $shortcut.Save()
+                        Write-Host "Desktop shortcut: $shortcutPath"
+                    } catch {
+                        Write-Warning "Desktop shortcut could not be created: $($_.Exception.Message)"
+                    }
+                }
+            }
             $committed = $true
             Write-Host "Installed dsh $Version"
             Write-Host "Launcher: $shim"
+            Write-Host "Git Bash shim: $shShim"
             Write-Host "Runtime: $(Join-Path $newVersionDir 'runtime\node.exe')"
         } finally {
             if (-not $committed -and $moved -and $newVersionDir -and (Test-Path -LiteralPath $newVersionDir)) {
@@ -373,6 +421,16 @@ try {
             Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
         }
     } @cli
+} catch {
+    # Windows PowerShell 5.1 can leave the process exit code at 0 after an unhandled
+    # exception in a -File script, which would silently report a failed install as
+    # success; translate any escapee into an explicit non-zero exit there. Under
+    # `irm|iex` there is no process boundary, so rethrow instead of exiting the host.
+    if ($dshFileInvocation) {
+        [Console]::Error.WriteLine("install.ps1: ERROR: $($_.Exception.Message)")
+        exit 1
+    }
+    throw
 } finally {
     $ErrorActionPreference = $dshOuterErrorAction
     [Net.ServicePointManager]::SecurityProtocol = $dshOuterTls
