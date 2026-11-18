@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -76,6 +76,16 @@ async function main() {
   const prefixFlag = platform === 'win' ? '-Prefix' : '--prefix'
   const checksumFlag = platform === 'win' ? '-Checksum' : '--checksum'
   const noPathFlag = platform === 'win' ? '-NoModifyPath' : '--no-modify-path'
+  // Windows-only: install.sh has no shortcut options, so these are never appended on Linux.
+  const noShortcutFlag = '-NoShortcut'
+  const shortcutDirFlag = '-ShortcutDir'
+  const readShortcut = async (lnkPath) => {
+    const quoted = lnkPath.replace(/'/g, "''")
+    const script = `$l = (New-Object -ComObject WScript.Shell).CreateShortcut('${quoted}'); $l.TargetPath; $l.Arguments`
+    const run = await invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
+    if (run.status !== 0) throw new Error(`Could not read shortcut ${lnkPath}\n${run.output}`)
+    return run.output.trim()
+  }
   const runInstaller = async (installerArgs, env = process.env) => {
     const [command, commandArgs] = installerInvocation(root, platform, installerArgs)
     return invoke(command, commandArgs, { env })
@@ -179,7 +189,10 @@ async function main() {
     mkdirSync(isolated, { recursive: true })
     copyFileSync(archive, isolatedArchive)
     const noChecksumPrefix = join(temp, 'no-checksum-prefix')
-    let result = await runInstaller([versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, noChecksumPrefix, noPathFlag])
+    let result = await runInstaller([
+      versionFlag, options.version, archiveFlag, isolatedArchive, prefixFlag, noChecksumPrefix, noPathFlag,
+      ...(platform === 'win' ? [noShortcutFlag] : []),
+    ])
     assertSuccess(result, 'local archive without a checksum installs with verification skipped')
     if (!result.output.toLowerCase().includes('skipping')) {
       throw new Error(`Checksum skip was not reported\n${result.output}`)
@@ -205,12 +218,13 @@ async function main() {
     if (existsSync(wrongVersionPrefix)) throw new Error('Version-mismatch failure created the installation prefix')
 
     const installPrefix = join(temp, 'install prefix with spaces')
+    const shortcutDir = join(temp, 'shortcuts')
     const home = join(temp, 'home')
     mkdirSync(home, { recursive: true })
     const installArgs = [versionFlag, options.version, archiveFlag, archive, prefixFlag, installPrefix]
     let userPathBefore
     if (platform === 'win') {
-      installArgs.push(noPathFlag)
+      installArgs.push(noPathFlag, shortcutDirFlag, shortcutDir)
       userPathBefore = (await invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"])).stdout.trim()
     }
     // The CI workflow exports DSH_VERSION at job level; scrub DSH_* so the installers
@@ -222,6 +236,19 @@ async function main() {
     const env = { ...scrubbed, HOME: home, DSH_HOME: join(home, '.dsh') }
     result = await runInstaller(installArgs, env)
     assertSuccess(result, 'valid local archive installation')
+    if (platform === 'win') {
+      const lnks = readdirSync(shortcutDir).filter((name) => name.endsWith('.lnk'))
+      if (lnks.length !== 2) throw new Error(`Expected 2 shortcuts in ${shortcutDir}, found ${lnks.length}: ${lnks.join(', ')}`)
+      for (const name of lnks) {
+        const content = await readShortcut(join(shortcutDir, name))
+        if (!/cmd\.exe/i.test(content)) throw new Error(`Shortcut ${name} does not target cmd.exe:\n${content}`)
+        if (!content.includes('/K')) throw new Error(`Shortcut ${name} does not keep the console open with /K:\n${content}`)
+        if (!content.includes('web')) throw new Error(`Shortcut ${name} does not launch dsh web:\n${content}`)
+        if (!/bin\\dsh\.cmd/i.test(content)) throw new Error(`Shortcut ${name} does not target the bin shim:\n${content}`)
+        if (content.includes('versions\\')) throw new Error(`Shortcut ${name} targets a versioned launcher:\n${content}`)
+      }
+      console.log('PASS: Windows shortcuts created in -ShortcutDir, launching dsh web through cmd /K')
+    }
 
     const shim = platform === 'win'
       ? join(installPrefix, 'bin', 'dsh.cmd')
@@ -257,9 +284,24 @@ async function main() {
     if (result.output.trim() !== options.version) throw new Error('Previous launcher changed after failed reinstall')
 
     if (platform === 'win') {
+      const noShortcutDir = join(temp, 'no-shortcut-dir')
+      const noShortcutPrefix = join(temp, 'no-shortcut prefix')
+      result = await runInstaller([
+        versionFlag, options.version, archiveFlag, archive, prefixFlag, noShortcutPrefix,
+        noPathFlag, noShortcutFlag, shortcutDirFlag, noShortcutDir,
+      ], env)
+      assertSuccess(result, 'installation with -NoShortcut')
+      if (!result.output.includes('Shortcuts were not created')) {
+        throw new Error(`-NoShortcut was not reported\n${result.output}`)
+      }
+      if (existsSync(noShortcutDir) && readdirSync(noShortcutDir).some((name) => name.endsWith('.lnk'))) {
+        throw new Error('-NoShortcut still created .lnk files')
+      }
+      console.log('PASS: -NoShortcut created no shortcuts')
+
       const inferredPrefix = join(temp, 'inferred-version-prefix')
       copyFileSync(`${archive}.sha256`, `${isolatedArchive}.sha256`)
-      result = await runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, isolatedArchive, prefixFlag, inferredPrefix, noPathFlag, noShortcutFlag], env)
       assertSuccess(result, 'archive-name version inference installation')
       if (!result.output.toLowerCase().includes('resolved dsh version')) {
         throw new Error(`Version inference was not reported\n${result.output}`)
@@ -272,14 +314,14 @@ async function main() {
       const renamedArchive = join(temp, 'package.zip')
       copyFileSync(archive, renamedArchive)
       const renamedPrefix = join(temp, 'renamed-prefix')
-      result = await runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, renamedArchive, prefixFlag, renamedPrefix, noPathFlag, noShortcutFlag], env)
       assertFailure(result, 'archive name without version information', 'version')
       if (existsSync(renamedPrefix)) throw new Error('Unnamed-archive failure created the installation prefix')
 
       const foreignArchive = join(temp, `dsh-v${options.version}-linux-x64.tar.gz`)
       copyFileSync(archive, foreignArchive)
       const foreignPrefix = join(temp, 'foreign-prefix')
-      result = await runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag], env)
+      result = await runInstaller([archiveFlag, foreignArchive, prefixFlag, foreignPrefix, noPathFlag, noShortcutFlag], env)
       assertFailure(result, 'foreign-platform archive', 'win-x64')
       if (existsSync(foreignPrefix)) throw new Error('Foreign-platform failure created the installation prefix')
 

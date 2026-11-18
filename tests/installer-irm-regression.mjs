@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -134,6 +134,14 @@ async function main() {
   const userPath = async () =>
     (await invoke('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"])).stdout.trim()
 
+  const readShortcut = async (lnkPath) => {
+    const quoted = lnkPath.replace(/'/g, "''")
+    const script = `$l = (New-Object -ComObject WScript.Shell).CreateShortcut('${quoted}'); $l.TargetPath; $l.Arguments`
+    const run = await invoke('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
+    if (run.status !== 0) throw new Error(`Could not read shortcut ${lnkPath}\n${run.output}`)
+    return run.output.trim()
+  }
+
   // 1. Full flow through iex: explicit DSH_VERSION + local archive + prefix with spaces.
   {
     const pathBefore = await userPath()
@@ -143,6 +151,7 @@ async function main() {
       DSH_ARCHIVE: archive,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_SHORTCUT: '1',
     })
     assert(result.status === 0, 'irm|iex full install exits zero', result.output)
     assert(/installed dsh 0\.2\.2-rc\.1/i.test(result.output), 'install completion reported', result.output)
@@ -158,6 +167,7 @@ async function main() {
       DSH_ARCHIVE: archive,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_SHORTCUT: '1',
     })
     assert(result.status === 0, 'version inferred from archive name under iex', result.output)
     assert(/from archive name/i.test(result.output), 'inference was reported', result.output)
@@ -172,6 +182,7 @@ async function main() {
       DSH_ARCHIVE: archive,
       DSH_PREFIX: join(temp, 'unsafe prefix'),
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_SHORTCUT: '1',
     })
     assert(result.status !== 0, 'unsafe DSH_VERSION fails non-zero', result.output)
     assert(/unsafe version/i.test(result.output), 'unsafe version message surfaced', result.output)
@@ -183,6 +194,7 @@ async function main() {
       DSH_RELEASES_JSON_URL: `http://127.0.0.1:${port}/nope`,
       DSH_PREFIX: join(temp, 'noversion prefix'),
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_SHORTCUT: '1',
     })
     assert(result.status !== 0, 'unresolvable version fails non-zero', result.output)
     assert(/failed to read the dsh releases json/i.test(result.output), 'release index failure surfaced', result.output)
@@ -198,11 +210,54 @@ async function main() {
       DSH_GH_PROXY: `http://127.0.0.1:${port}`,
       DSH_PREFIX: prefix,
       DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_SHORTCUT: '1',
     })
     assert(result.status !== 0 && /resolved dsh version: 1\.0\.1-rc\.1/i.test(result.output), 'latest resolution picks 1.0.1-rc.1', result.output)
     assert(requestedPaths.includes('/releases.json'), 'release index JSON fetched directly', JSON.stringify(requestedPaths))
     assert(requestedPaths.some((p) => p.startsWith('/https://github.com/') && p.endsWith('.sha256')), 'availability probe rewritten through proxy', JSON.stringify(requestedPaths))
     assert(requestedPaths.some((p) => p.startsWith('/https://github.com/') && !p.endsWith('.sha256')), 'download request rewritten through proxy', JSON.stringify(requestedPaths))
+  }
+
+  // 6. Shortcuts are created by default; DSH_SHORTCUT_DIR redirects them away from the
+  //    real Desktop/Start Menu so the test never touches the user's profile.
+  {
+    const prefix = join(temp, 'shortcut prefix')
+    const shortcutDir = join(temp, 'shortcuts')
+    const result = await runCase('shortcut-dir', {
+      DSH_VERSION: version,
+      DSH_ARCHIVE: archive,
+      DSH_PREFIX: prefix,
+      DSH_NO_MODIFY_PATH: '1',
+      DSH_SHORTCUT_DIR: shortcutDir,
+    })
+    assert(result.status === 0, 'DSH_SHORTCUT_DIR install exits zero', result.output)
+    const lnks = existsSync(shortcutDir) ? readdirSync(shortcutDir).filter((name) => name.endsWith('.lnk')) : []
+    assert(lnks.length === 2, 'DSH_SHORTCUT_DIR creates two shortcuts', `${lnks.length}: ${lnks.join(', ')}`)
+    for (const name of lnks) {
+      const content = await readShortcut(join(shortcutDir, name))
+      assert(/cmd\.exe/i.test(content) && content.includes('/K') && content.includes('web'),
+        `shortcut ${name} launches dsh web through cmd /K`, content)
+      assert(/bin\\dsh\.cmd/i.test(content) && !content.includes('versions\\'),
+        `shortcut ${name} targets the activated bin shim`, content)
+    }
+  }
+
+  // 7. DSH_NO_SHORTCUT suppresses creation entirely.
+  {
+    const prefix = join(temp, 'no-shortcut prefix')
+    const shortcutDir = join(temp, 'no-shortcut-dir')
+    const result = await runCase('no-shortcut', {
+      DSH_VERSION: version,
+      DSH_ARCHIVE: archive,
+      DSH_PREFIX: prefix,
+      DSH_NO_MODIFY_PATH: '1',
+      DSH_NO_SHORTCUT: '1',
+      DSH_SHORTCUT_DIR: shortcutDir,
+    })
+    assert(result.status === 0, 'DSH_NO_SHORTCUT install exits zero', result.output)
+    assert(/shortcuts were not created/i.test(result.output), 'DSH_NO_SHORTCUT was reported', result.output)
+    assert(!existsSync(shortcutDir) || readdirSync(shortcutDir).every((name) => !name.endsWith('.lnk')),
+      'DSH_NO_SHORTCUT created no shortcuts')
   }
 
   await new Promise((close) => server.close(close))

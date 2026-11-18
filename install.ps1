@@ -17,6 +17,8 @@
 #   DSH_RELEASES_JSON_URL Release index JSON used for version resolution
 #   DSH_GH_PROXY         GitHub acceleration proxy (e.g. https://api.gitproxy.dev)
 #   DSH_NO_MODIFY_PATH   Non-empty: skip the user PATH update
+#   DSH_NO_SHORTCUT      Non-empty: skip the desktop / start-menu shortcuts
+#   DSH_SHORTCUT_DIR     Directory for the shortcuts (default: Desktop and Programs)
 
 $dshOuterErrorAction = $ErrorActionPreference
 $dshOuterTls = [Net.ServicePointManager]::SecurityProtocol
@@ -35,7 +37,8 @@ try {
             $token = [string]$tokens[$index]
             switch -Regex ($token) {
                 '^(?i)-NoModifyPath$' { $cli['NoModifyPath'] = $true }
-                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesJsonUrl|GitHubProxy)$' {
+                '^(?i)-NoShortcut$' { $cli['NoShortcut'] = $true }
+                '^(?i)-(Version|Archive|Checksum|Prefix|BaseUrl|ReleasesJsonUrl|GitHubProxy|ShortcutDir)$' {
                     $index++
                     if ($index -ge $tokens.Count) { throw "$token requires a value" }
                     $cli[$Matches[1]] = [string]$tokens[$index]
@@ -45,6 +48,7 @@ try {
         }
     }
     if ($env:DSH_NO_MODIFY_PATH) { $cli['NoModifyPath'] = $true }
+    if ($env:DSH_NO_SHORTCUT) { $cli['NoShortcut'] = $true }
 
     & {
         param(
@@ -55,7 +59,9 @@ try {
             [string]$BaseUrl = $(if ($env:DSH_BASE_URL) { $env:DSH_BASE_URL } else { 'https://github.com/RainEchoA/dsh-cli-standalone/releases/download' }),
             [string]$ReleasesJsonUrl = $(if ($env:DSH_RELEASES_JSON_URL) { $env:DSH_RELEASES_JSON_URL } else { 'https://rainechoa.github.io/dsh-cli-standalone/releases.json' }),
             [string]$GitHubProxy = $env:DSH_GH_PROXY,
-            [switch]$NoModifyPath
+            [string]$ShortcutDir = $env:DSH_SHORTCUT_DIR,
+            [switch]$NoModifyPath,
+            [switch]$NoShortcut
         )
 
         # A pwsh (PowerShell 7) parent exports a PSModulePath that lists PowerShell 7 module
@@ -238,11 +244,26 @@ try {
             return ($output | Out-String).Trim()
         }
 
+        # Launch `dsh web` through cmd /K so the console stays open when the CLI returns;
+        # a .lnk pointing straight at the .cmd would flash and close. Target the activated
+        # shim rather than the version directory so upgrades keep the shortcut working.
+        function New-DshShortcut([string]$Path, [string]$Shim, [string]$DshVersion) {
+            $shell = New-Object -ComObject WScript.Shell
+            $link = $shell.CreateShortcut($Path)
+            $link.TargetPath = $env:ComSpec
+            $link.Arguments = ('/K ""{0}" web"' -f $Shim)
+            $link.WorkingDirectory = Split-Path -Parent $Shim
+            $link.IconLocation = "$env:ComSpec,0"
+            $link.Description = "dsh web $DshVersion"
+            $link.Save()
+        }
+
         $work = Join-Path $env:TEMP "dsh-install-$([Guid]::NewGuid().ToString('N'))"
         $newVersionDir = $null
         $moved = $false
         $committed = $false
         $oldShim = $null
+        $createdShortcuts = @()
         try {
             New-Item -ItemType Directory -Path $work | Out-Null
             $filename = "dsh-v$Version-win-x64.zip"
@@ -362,6 +383,34 @@ try {
                 else { Remove-Item -LiteralPath $shim -Force -ErrorAction SilentlyContinue }
                 throw
             }
+            if ($NoShortcut) {
+                Write-Host 'Shortcuts were not created (-NoShortcut)'
+            } else {
+                try {
+                    if ($ShortcutDir) {
+                        New-Item -ItemType Directory -Force -Path $ShortcutDir | Out-Null
+                        $ShortcutDir = (Resolve-Path -LiteralPath $ShortcutDir).Path
+                        $shortcutPaths = @(
+                            (Join-Path $ShortcutDir 'dsh Web (Desktop).lnk'),
+                            (Join-Path $ShortcutDir 'dsh Web (Start Menu).lnk')
+                        )
+                    } else {
+                        $shortcutPaths = @(
+                            (Join-Path ([Environment]::GetFolderPath('Desktop')) 'dsh Web.lnk'),
+                            (Join-Path ([Environment]::GetFolderPath('Programs')) 'dsh Web.lnk')
+                        )
+                    }
+                    foreach ($shortcutPath in $shortcutPaths) {
+                        New-DshShortcut $shortcutPath $shim $Version
+                        $createdShortcuts += $shortcutPath
+                        Write-Host "Shortcut: $shortcutPath"
+                    }
+                } catch {
+                    # Shortcuts are a convenience; a COM or permission failure must never
+                    # abort an otherwise successful installation.
+                    Write-Warning "Could not create shortcuts: $($_.Exception.Message)"
+                }
+            }
             $committed = $true
             Write-Host "Installed dsh $Version"
             Write-Host "Launcher: $shim"
@@ -388,6 +437,11 @@ try {
                 Write-Host "  Remove-Item -Recurse -Force $($quoted -join ', ')"
             }
         } finally {
+            if (-not $committed -and $createdShortcuts.Count -gt 0) {
+                foreach ($shortcutPath in $createdShortcuts) {
+                    Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
+                }
+            }
             if (-not $committed -and $moved -and $newVersionDir -and (Test-Path -LiteralPath $newVersionDir)) {
                 Remove-Item -LiteralPath $newVersionDir -Recurse -Force -ErrorAction SilentlyContinue
             }
