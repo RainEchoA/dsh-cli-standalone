@@ -173,7 +173,7 @@ CentOS 8 容器只证明 **glibc 2.28 用户空间兼容性**。容器使用宿�
 
 ## Release 版本页面
 
-每次 Release 成功后，工作流会通过 GitHub Pages 发布静态版本索引，页面访问时不依赖 GitHub API。也可以在 Actions 页面手动运行 `pages` 工作流，直接刷新索引而无需重新构建或发布安装包：
+每次 Release 成功后，工作流会通过 GitHub Pages 发布静态版本索引，页面访问时不依赖 GitHub API。也可以在 Actions 页面手动运行 `pages` 工作流，直接刷新索引而无需重新构建或发布安装包。只有 `main` 分支和 `v*` 标签允许部署；特性分支手动触发会跳过部署，不会覆盖正式 Pages 站点。
 
 - 人工查看：<https://rainechoa.github.io/dsh-cli-standalone/>
 - 程序读取：<https://rainechoa.github.io/dsh-cli-standalone/releases.json>

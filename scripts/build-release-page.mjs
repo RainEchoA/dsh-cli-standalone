@@ -159,7 +159,9 @@ function renderHtml(data) {
     .release-action span { display: inline-block; margin-left: 5px; color: var(--cyan); transition: transform .2s; }
     .release-card:hover .release-action span { transform: translate(2px, -2px); }
     .empty { padding: 48px; color: var(--muted); text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: 16px; }
-    .footer { display: flex; justify-content: space-between; gap: 20px; padding: 23px 0 32px; color: #657189; border-top: 1px solid #ffffff0c; font-size: 11px; }
+    .footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 20px; padding: 23px 0 32px; color: #657189; border-top: 1px solid #ffffff0c; font-size: 11px; }
+    .footer .disclaimer { flex-basis: 100%; line-height: 1.7; }
+    .footer a { color: #929db5; text-decoration: underline; text-underline-offset: 3px; }
     @media (max-width: 700px) {
       .shell { width: min(100% - 30px, 1080px); }
       .topbar { padding: 20px 0; }
@@ -237,6 +239,7 @@ function renderHtml(data) {
       </section>
     </main>
     <footer class="footer">
+      <span class="disclaimer">本仓库仅提供打包与分发，不拥有被分发软件的版权。DeepSeek Harness、dsh、Node.js 及第三方依赖的版权归各原权利人所有；本仓库自身的打包与安装脚本使用 <a href="${escapeHtml(repositoryUrl)}/blob/main/LICENSE">MIT 许可证</a>。</span>
       <span>dsh-cli-standalone · Static release index</span>
       <span>更新于 <time datetime="${escapeHtml(data.generatedAt)}">${escapeHtml(data.generatedAt)}</time></span>
     </footer>
